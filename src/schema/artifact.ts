@@ -34,7 +34,7 @@ export interface PRArtifact {
   base: string;
   head?: string;
   commits: ArtifactCommit[];
-  /** Unified diff from base to head. Empty when the system didn't produce or change code (e.g. "original"). */
+  /** Unified diff from base to head: the code the PR proposes. */
   diff: string;
   meta: ArtifactMeta;
 }
