@@ -22,12 +22,13 @@ cases/<id>/
 | `title` | Short human name. |
 | `split` | `dev` or `test`. Test cases are held out from tool authors. |
 | `mode` | `replay` (sessions and change fixed) or `e2e` (agent solves the task). |
-| `repo.bundle` / `repo.url` | Exactly one. A bundle keeps the case self-contained: `git bundle create repo.bundle <branch>`, which must contain both commits. |
+| `repo.bundle` / `repo.url` | Exactly one. A bundle keeps the case self-contained: `git bundle create repo.bundle <ref>`, which must contain both commits. Any ref works; the sandbox fetches them all. |
 | `repo.base` | Full or abbreviated commit SHA the change starts from. |
 | `repo.head` | Commit with the finished change. Required for replay. |
 | `repo.branch` | Work branch in the sandbox. Defaults to `prbench/<id>`. Not `main`. |
+| `repo.recordedPath` | Where the repository was checked out when the sessions were recorded, as the logs spell it. Defaults to the first session's `cwd`. The sandbox maps it, and its parent directory, onto the sandbox checkout. |
 | `task` | The request as the user phrased it. |
-| `sessions[]` | `{agent, file, cwd}`. `agent` is `claude-code` or `codex`. `cwd` is the directory the session was recorded in, as written in the log; the sandbox rewrites it. |
+| `sessions[]` | `{agent, file, cwd}`. `agent` is `claude-code` or `codex`. `cwd` is the directory the session was recorded in, as written in the log: the repository or its parent. |
 | `facts` | Path to the fact sheet. |
 | `original` | `{title, body, url?}` for the PR that was published. Enables the `original` system. |
 | `provenance` | `{source, synthetic?, license?, notes?}`. |
@@ -46,10 +47,16 @@ cases/<id>/
 
 Write the fact sheet from the diff and sessions **before** reading any description of the change, including the original PR. Otherwise the answer key inherits that description's framing.
 
+## Real cases: cases-local/
+
+Real cases hold real session logs, so they live in `cases-local/`, which git ignores. Point commands at it with `--cases cases-local`.
+
+`scripts/import-tracetoon-cases.ts` builds Tracetoon's eight description-eval cases there, on the machine that recorded them. Each case gets the repository bundle, the matched sessions cut to the case's time window, Tracetoon's hand-checked fact sheet, and the published PR. Sessions end two minutes after the head commit, so the PR text written afterwards isn't in them. The three cases Tracetoon held out while designing its description rules are in the `test` split.
+
 ## Privacy
 
 Session logs contain prompts, file contents and command output. Before adding a real case:
 
 - Get the session owner's consent.
 - Redact secrets, tokens, personal data and unrelated work.
-- Don't commit cases from private repositories to a shared or public cases directory. Keep them in a separate private location.
+- Don't commit real cases. Keep them in `cases-local/` or another private location.

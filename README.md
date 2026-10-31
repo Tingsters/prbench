@@ -4,7 +4,7 @@ An evaluation harness for tools that write or change the pull requests produced 
 
 It answers: **does this PR tool produce better pull requests than the agent would have without it?** It runs each system on the same fixed cases, collects the PR each one would have opened, and scores those PRs for accuracy and usefulness to a reviewer.
 
-> **Status: milestone 0.** Cases, PR artifacts, the sandbox and the `original` system work. Agent adapters, judges and metrics come next; see the [roadmap](docs/methodology.md#roadmap).
+> **Status: milestone 1.** Three systems (`original`, `claude-native`, `tracetoon`), blind pairwise judging by two model families, and a report. A dedicated accuracy checker and human calibration come next; see the [roadmap](docs/methodology.md#roadmap).
 
 ## Why
 
@@ -26,6 +26,22 @@ bun run typecheck
 
 `run --keep-sandbox` leaves the sandbox on disk so you can inspect it.
 
+## Comparing PR tools
+
+```sh
+bun run scripts/import-tracetoon-cases.ts            # real cases -> cases-local/ (git-ignored)
+bun run prbench run -s original      --cases cases-local
+bun run prbench run -s claude-native --cases cases-local --split dev
+bun run prbench run -s tracetoon     --cases cases-local --split dev
+bun run prbench judge --cases cases-local             # both orders, judges: claude and codex
+# -> results/report.md, results/report.json, results/judgments/
+```
+
+- **Agent systems need their own Claude Code login.** Sandboxes have their own home directory, so run `claude setup-token` and save the token to `~/.prbench/claude-oauth-token`, or set `PRBENCH_CLAUDE_OAUTH_TOKEN`. An `ANTHROPIC_API_KEY` also works.
+- **Model and cost.** `--model` (default `opus`) and `--max-budget-usd` (default 25 per run) apply to both agent systems.
+- **Judges** use the `claude` and `codex` CLIs you are already signed in to, with tools and hooks off. Choose them with `--judges claude:opus,codex`.
+- **Caching.** Judgments are cached by prompt, so re-running `judge` only pays for new or changed pairs. `prbench report` rebuilds the report from `results/pairs.json`.
+
 ## How it fits together
 
 - A **case** (`cases/<id>/`) fixes the starting point: a repo snapshot, the task and, for replay cases, the recorded agent sessions and resulting commits. [docs/cases.md](docs/cases.md)
@@ -34,7 +50,7 @@ bun run typecheck
 
 ## Adding a system
 
-Implement `System` from `src/systems/types.ts` and register it in `src/systems/index.ts`. A system gets the loaded case and a sandbox, runs whatever it needs with `sandbox.env` inside `sandbox.repo`, and returns a `PRArtifact`. PRs opened through `gh pr create` are available from `sandbox.capturedPRs()`.
+Implement `System` from `src/systems/types.ts` and register it in `src/systems/index.ts`. A system gets the loaded case (without its fact sheet) and a sandbox, runs whatever it needs with `sandbox.env` inside `sandbox.repo`, and returns a `PRArtifact`. PRs opened through `gh pr create` are available from `sandbox.capturedPRs()`. Agent systems should use `runClaude` (`src/agents/claude.ts`) and `PR_PROMPT` (`src/systems/agentShared.ts`) so they differ from the baseline only in what they install.
 
 ## License
 
