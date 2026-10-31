@@ -6,7 +6,7 @@ import { CaseError, caseDirs, loadCase, loadFacts, type Facts, type LoadedCase }
 import { checkArtifact, type PRArtifact } from './schema/artifact.ts';
 import { runCase } from './run/runner.ts';
 import { findSystem, SYSTEMS } from './systems/index.ts';
-import { DEFAULT_AGENT_OPTIONS } from './systems/agentShared.ts';
+import { DEFAULT_AGENT_OPTIONS, parseBudget } from './systems/agentShared.ts';
 import { judgePair, type PairResult } from './judge/pairwise.ts';
 import { parseJudge } from './judge/providers.ts';
 import { buildReport, reportMarkdown } from './report.ts';
@@ -94,7 +94,7 @@ program
   .option('--cases <dir>', 'cases directory', 'cases')
   .option('-o, --out <dir>', 'output directory', 'results/artifacts')
   .option('--model <model>', 'model for agent systems', DEFAULT_AGENT_OPTIONS.model)
-  .option('--max-budget-usd <n>', 'spending cap per agent run', String(DEFAULT_AGENT_OPTIONS.maxBudgetUsd))
+  .option('--max-budget-usd <n>', 'spending cap per agent run, or "none"', String(DEFAULT_AGENT_OPTIONS.maxBudgetUsd ?? 'none'))
   .option('--skip-existing', 'skip cases that already have an artifact for this system')
   .option('--keep-sandbox', 'leave sandboxes on disk for inspection')
   .action(
@@ -109,7 +109,7 @@ program
       skipExisting?: boolean;
       keepSandbox?: boolean;
     }) => {
-      const system = findSystem(opts.system, { model: opts.model, maxBudgetUsd: Number(opts.maxBudgetUsd) });
+      const system = findSystem(opts.system, { model: opts.model, maxBudgetUsd: parseBudget(opts.maxBudgetUsd) });
       const { loaded, errors } = loadAll(resolve(opts.cases));
       const wanted = opts.case ? list(opts.case) : undefined;
       let picked = wanted ? loaded.filter((l) => wanted.includes(l.case.id)) : loaded;

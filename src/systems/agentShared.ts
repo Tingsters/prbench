@@ -13,13 +13,22 @@ export const PR_PROMPT = 'The work on this branch is done. Open a pull request f
 
 export interface AgentOptions {
   model: string;
-  maxBudgetUsd: number;
+  /** Spending cap per run; undefined means no cap. */
+  maxBudgetUsd?: number;
   timeoutMs: number;
+}
+
+/** "none" (or "0") means no cap; anything else must be a positive number of dollars. */
+export function parseBudget(value: string): number | undefined {
+  if (value === 'none' || value === '0') return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`budget must be a number of dollars or "none", got "${value}"`);
+  return n;
 }
 
 export const DEFAULT_AGENT_OPTIONS: AgentOptions = {
   model: process.env.PRBENCH_MODEL ?? 'opus',
-  maxBudgetUsd: Number(process.env.PRBENCH_MAX_BUDGET_USD ?? 25),
+  maxBudgetUsd: parseBudget(process.env.PRBENCH_MAX_BUDGET_USD ?? '25'),
   timeoutMs: Number(process.env.PRBENCH_TIMEOUT_MS ?? 45 * 60_000),
 };
 

@@ -31,6 +31,8 @@ export interface PairResult {
   judge: string;
   x: string;
   y: string;
+  /** The model the agent systems in this pair ran on, when any did. */
+  model?: string;
   /** The winning system, or "tie". */
   verdict: string;
   /** The two orders picked different systems. */
@@ -145,5 +147,19 @@ export async function judgePair(opts: {
     sides[s.labels.A]!.push(s.judgment.A);
     sides[s.labels.B]!.push(s.judgment.B);
   }
-  return { case: c.id, split: c.split, judge: judge.id, x: x.system, y: y.system, ...combine(ab, ba), sides, warnings };
+  if (x.meta.model && y.meta.model && x.meta.model !== y.meta.model) {
+    warnings.push(`${x.system} ran on ${x.meta.model} but ${y.system} on ${y.meta.model}`);
+  }
+  const model = x.meta.model ?? y.meta.model;
+  return {
+    case: c.id,
+    split: c.split,
+    judge: judge.id,
+    x: x.system,
+    y: y.system,
+    ...(model ? { model } : {}),
+    ...combine(ab, ba),
+    sides,
+    warnings,
+  };
 }

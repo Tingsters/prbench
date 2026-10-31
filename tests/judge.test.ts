@@ -9,6 +9,7 @@ import { extractJson, parseJudge, type JudgeProvider } from '../src/judge/provid
 import { buildPrompt, checkJudgment, JUDGMENT_SCHEMA, RUBRIC_KEYS, type Judgment, type SideJudgment } from '../src/judge/rubric.ts';
 import { agreedResults, buildReport, reportMarkdown } from '../src/report.ts';
 import { bootstrapMeanCI, cohenKappa, signTest } from '../src/stats.ts';
+import { parseBudget } from '../src/systems/agentShared.ts';
 import { EXAMPLE, tempDir } from './helpers.ts';
 
 const facts: Facts = {
@@ -209,6 +210,56 @@ describe('stats', () => {
   });
 });
 
+describe('budget', () => {
+  test('"none" removes the cap; other values must be dollars', () => {
+    expect(parseBudget('none')).toBeUndefined();
+    expect(parseBudget('0')).toBeUndefined();
+    expect(parseBudget('12.5')).toBe(12.5);
+    expect(() => parseBudget('lots')).toThrow(/number of dollars or "none"/);
+  });
+});
+
+describe('report by model', () => {
+  test('breaks head-to-head results down by agent model when cases used more than one', () => {
+    const r = (c: string, model: string, verdict: string) => ({
+      case: c,
+      split: 'dev',
+      judge: 'claude:opus',
+      x: 'tracetoon',
+      y: 'claude-native',
+      model,
+      verdict,
+      flipped: false,
+      sides: { tracetoon: [side()], 'claude-native': [side()] },
+      warnings: [],
+    });
+    const report = buildReport({
+      results: [r('a', 'opus', 'tracetoon'), r('b', 'opus', 'tracetoon'), r('c', 'sonnet', 'claude-native')],
+      artifacts: new Map(),
+      facts: new Map([['a', facts], ['b', facts], ['c', facts]]),
+      splitOf: new Map([['a', 'dev'], ['b', 'dev'], ['c', 'dev']]),
+    });
+    expect(report.splits.dev!.byModel.map((p) => [p.model, p.xWins, p.yWins])).toEqual([
+      ['opus', 2, 0],
+      ['sonnet', 0, 1],
+    ]);
+    expect(reportMarkdown(report)).toContain('| sonnet | tracetoon vs claude-native | claude:opus | 0 | 1 | 0 | 0 |');
+  });
+
+  test('a pair run on different models is flagged', async () => {
+    const judge: JudgeProvider = {
+      id: 'fake:2',
+      family: 'test',
+      ask: async () => ({ text: JSON.stringify({ A: side(), B: side(), preferred: 'tie', reason: '' }) }),
+    };
+    const x = { ...artifact('tracetoon', 'x'), meta: { ...artifact('tracetoon', 'x').meta, model: 'opus' } };
+    const y = { ...artifact('claude-native', 'y'), meta: { ...artifact('claude-native', 'y').meta, model: 'sonnet' } };
+    const res = await judgePair({ loaded: loadCase(EXAMPLE), facts, x, y, judge, outDir: tempDir() });
+    expect(res.model).toBe('opus');
+    expect(res.warnings).toContain('tracetoon ran on opus but claude-native on sonnet');
+  });
+});
+
 describe('report', () => {
   const pr = (c: string, split: string, judge: string, verdict: string, flipped = false) => ({
     case: c,
@@ -253,6 +304,8 @@ describe('report', () => {
     expect(tt).toMatchObject({ factualErrors: 0, claimCoverage: 1, medianWords: 5 });
     expect(dev.systems.find((s) => s.system === 'claude-native')).toMatchObject({ factualErrors: 1, claimCoverage: 0.5 });
     expect(report.judgeAgreement).toEqual([{ judges: ['claude:opus', 'codex:default'], items: 3, agreement: 2 / 3, kappa: expect.any(Number) }]);
+
+    expect(dev.byModel).toEqual([]); // one model (none recorded): no breakdown
 
     const md = reportMarkdown(report);
     expect(md).toContain('## dev split (2 cases)');

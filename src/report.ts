@@ -43,7 +43,10 @@ export interface Report {
   generatedAt: string;
   judges: string[];
   systems: string[];
-  splits: Record<string, { cases: string[]; pairs: PairSummary[]; systems: SystemSummary[] }>;
+  splits: Record<
+    string,
+    { cases: string[]; pairs: PairSummary[]; byModel: (PairSummary & { model: string })[]; systems: SystemSummary[] }
+  >;
   judgeAgreement: { judges: [string, string]; items: number; agreement: number; kappa: number }[];
   warnings: string[];
 }
@@ -160,7 +163,16 @@ export function buildReport(opts: {
     const arts = new Map([...opts.artifacts].filter(([c]) => cases.includes(c)));
     const pairs = judges.flatMap((j) => summarizePairs(rs.filter((r) => r.judge === j), j));
     if (judges.length > 1) pairs.push(...summarizePairs(agreedResults(rs), AGREE));
-    splits[split] = { cases, pairs, systems: summarizeSystems(rs, arts, opts.facts) };
+    const byModel: (PairSummary & { model: string })[] = [];
+    const models = [...new Set(rs.map((r) => r.model).filter((m): m is string => Boolean(m)))].sort();
+    if (models.length > 1) {
+      for (const model of models) {
+        const mr = rs.filter((r) => r.model === model);
+        const groups = judges.length > 1 ? [...judges.map((j) => [j, mr.filter((r) => r.judge === j)] as const), [AGREE, agreedResults(mr)] as const] : [[judges[0]!, mr] as const];
+        for (const [j, list] of groups) byModel.push(...summarizePairs(list, j).map((p) => ({ ...p, model })));
+      }
+    }
+    splits[split] = { cases, pairs, byModel, systems: summarizeSystems(rs, arts, opts.facts) };
   }
 
   const judgeAgreement: Report['judgeAgreement'] = [];
@@ -213,6 +225,12 @@ export function reportMarkdown(r: Report): string {
       out.push(
         `| ${p.x} vs ${p.y} | ${p.judge} | ${p.xWins} | ${p.yWins} | ${p.ties} | ${p.flips} | ${pct(p.winRate)} | ${f2(p.signP)} | ${f2(p.meanDiff)} [${f2(p.ci[0])}, ${f2(p.ci[1])}] |`,
       );
+    }
+    if (s.byModel.length) {
+      out.push('', '### Head to head by agent model', '');
+      out.push('| model | x vs y | judge | x wins | y wins | ties | flips |');
+      out.push('|---|---|---|---|---|---|---|');
+      for (const p of s.byModel) out.push(`| ${p.model} | ${p.x} vs ${p.y} | ${p.judge} | ${p.xWins} | ${p.yWins} | ${p.ties} | ${p.flips} |`);
     }
     out.push('', '### Per system (means over every judgment of that system)', '');
     out.push('| system | judgments | factual errors | unsupported claims | claims covered | context covered | uncertainties respected | traps hit | median words | agent cost |');
