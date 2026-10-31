@@ -5,6 +5,7 @@
 import { claudeCommand, describeRun, runClaude } from '../agents/claude.ts';
 import {
   AGENT_TOOLS,
+  DISALLOWED_TOOLS,
   agentArtifact,
   claudeVersion,
   DEFAULT_AGENT_OPTIONS,
@@ -26,6 +27,7 @@ export function claudeNative(options: Partial<AgentOptions> = {}): System {
         prompt: PR_PROMPT,
         model: o.model,
         allowedTools: AGENT_TOOLS,
+        disallowedTools: DISALLOWED_TOOLS,
         maxBudgetUsd: o.maxBudgetUsd,
         timeoutMs: o.timeoutMs,
         env: { TRACETOON: '0' },

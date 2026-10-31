@@ -9,7 +9,16 @@ import { exec } from '../util/exec.ts';
  * What every agent system is asked, word for word. Systems differ only in
  * what is installed around the agent, so the request itself is held fixed.
  */
-export const PR_PROMPT = 'The work on this branch is done. Open a pull request for it.';
+export const PR_PROMPT =
+  'The work on this branch is done. Open a pull request for it. ' +
+  "You're running unattended: nobody can answer questions, so don't stop to ask. " +
+  "If something can't be done in this environment, note it and carry on.";
+
+/**
+ * Tools no agent system may use. Claude Code's PowerShell tool fails inside
+ * sandboxes on Windows ("The command line is too long"); Bash works.
+ */
+export const DISALLOWED_TOOLS = ['PowerShell'];
 
 /**
  * Tools every agent system may use without asking; anything else is denied.

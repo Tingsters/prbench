@@ -74,6 +74,7 @@ describe('agent systems', () => {
     expect(call.args).toEqual(expect.arrayContaining(['-p', '--model', 'sonnet', '--permission-mode', 'acceptEdits']));
     expect(call.args[call.args.indexOf('--allowedTools') + 1]).toBe(AGENT_TOOLS.join(','));
     expect(call.args).not.toContain('--add-dir');
+    expect(call.args[call.args.indexOf('--disallowedTools') + 1]).toBe('PowerShell');
 
     expect(artifact.system).toBe('claude-native');
     expect(artifact.title).toBe('Fallback to world');
@@ -102,6 +103,7 @@ describe('agent systems', () => {
     expect(existsSync(join(sandboxRoot!, 'home', '.claude', 'settings.json'))).toBe(true);
     const tools: string = call.args[call.args.indexOf('--allowedTools') + 1];
     expect(tools.startsWith(AGENT_TOOLS.join(','))).toBe(true); // same base list as the baseline
+    expect(call.args[call.args.indexOf('--disallowedTools') + 1]).toBe('PowerShell');
     expect(tools).toContain('/home/.claude/skills/tracetoon/bin/tracetoon:*)');
     expect(call.args[call.args.indexOf('--add-dir') + 1]).toBe(join(sandboxRoot!, 'home', '.claude', 'skills', 'tracetoon'));
 
