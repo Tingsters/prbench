@@ -1,11 +1,15 @@
 #!/usr/bin/env bun
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { Command } from 'commander';
-import { CaseError, caseDirs, loadCase, type LoadedCase } from './schema/case.ts';
-import { checkArtifact } from './schema/artifact.ts';
+import { CaseError, caseDirs, loadCase, loadFacts, type Facts, type LoadedCase } from './schema/case.ts';
+import { checkArtifact, type PRArtifact } from './schema/artifact.ts';
 import { runCase } from './run/runner.ts';
 import { findSystem, SYSTEMS } from './systems/index.ts';
+import { DEFAULT_AGENT_OPTIONS } from './systems/agentShared.ts';
+import { judgePair, type PairResult } from './judge/pairwise.ts';
+import { parseJudge } from './judge/providers.ts';
+import { buildReport, reportMarkdown } from './report.ts';
 
 const program = new Command('prbench').description(
   'Evaluate tools that write or change the pull requests AI coding agents produce.',
@@ -23,6 +27,40 @@ function loadAll(root: string): { loaded: LoadedCase[]; errors: CaseError[] } {
     }
   }
   return { loaded, errors };
+}
+
+const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
+
+/** Runs `tasks` with at most `limit` in flight, reporting failures instead of stopping. */
+async function pool<T>(limit: number, tasks: (() => Promise<T>)[]): Promise<{ ok: T[]; failed: string[] }> {
+  const ok: T[] = [];
+  const failed: string[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const task = tasks[next++]!;
+      try {
+        ok.push(await task());
+      } catch (err) {
+        failed.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, limit) }, worker));
+  return { ok, failed };
+}
+
+function readArtifacts(dir: string, caseId: string, systems: string[]): Map<string, PRArtifact> {
+  const out = new Map<string, PRArtifact>();
+  for (const s of systems) {
+    const p = join(dir, caseId, `${s}.json`);
+    if (!existsSync(p)) continue;
+    const a = JSON.parse(readFileSync(p, 'utf8')) as PRArtifact;
+    const problems = checkArtifact(a);
+    if (problems.length) throw new Error(`${p} is not a valid artifact:\n  ${problems.join('\n  ')}`);
+    out.set(s, a);
+  }
+  return out;
 }
 
 program
@@ -44,38 +82,158 @@ program
   .command('systems')
   .description('List the systems that can be run')
   .action(() => {
-    for (const s of SYSTEMS) console.log(`${s.id.padEnd(12)} ${s.description}`);
+    for (const s of SYSTEMS) console.log(`${s.id.padEnd(14)} ${s.description}`);
   });
 
 program
   .command('run')
   .description('Run a system on one case, or on every case it supports, and write PR artifacts')
   .requiredOption('-s, --system <id>', 'system to run')
-  .option('-c, --case <id>', 'only this case')
+  .option('-c, --case <ids>', 'only these cases (comma-separated)')
+  .option('--split <split>', 'only cases in this split (dev or test)')
   .option('--cases <dir>', 'cases directory', 'cases')
   .option('-o, --out <dir>', 'output directory', 'results/artifacts')
+  .option('--model <model>', 'model for agent systems', DEFAULT_AGENT_OPTIONS.model)
+  .option('--max-budget-usd <n>', 'spending cap per agent run', String(DEFAULT_AGENT_OPTIONS.maxBudgetUsd))
+  .option('--skip-existing', 'skip cases that already have an artifact for this system')
   .option('--keep-sandbox', 'leave sandboxes on disk for inspection')
-  .action(async (opts: { system: string; case?: string; cases: string; out: string; keepSandbox?: boolean }) => {
-    const system = findSystem(opts.system);
-    const { loaded, errors } = loadAll(resolve(opts.cases));
-    const picked = opts.case ? loaded.filter((l) => l.case.id === opts.case) : loaded;
-    if (opts.case && picked.length === 0) {
-      const broken = errors.find((e) => e.where.includes(opts.case!));
-      throw new Error(broken ? broken.message : `no case "${opts.case}" under ${opts.cases}`);
-    }
-    for (const l of picked) {
-      const support = system.supports(l);
-      if (!support.supported) {
-        console.log(`skip  ${l.case.id}: ${support.reason}`);
-        continue;
+  .action(
+    async (opts: {
+      system: string;
+      case?: string;
+      split?: string;
+      cases: string;
+      out: string;
+      model: string;
+      maxBudgetUsd: string;
+      skipExisting?: boolean;
+      keepSandbox?: boolean;
+    }) => {
+      const system = findSystem(opts.system, { model: opts.model, maxBudgetUsd: Number(opts.maxBudgetUsd) });
+      const { loaded, errors } = loadAll(resolve(opts.cases));
+      const wanted = opts.case ? list(opts.case) : undefined;
+      let picked = wanted ? loaded.filter((l) => wanted.includes(l.case.id)) : loaded;
+      if (opts.split) picked = picked.filter((l) => l.case.split === opts.split);
+      for (const id of wanted ?? []) {
+        if (picked.some((l) => l.case.id === id)) continue;
+        const broken = errors.find((e) => e.where.includes(id));
+        throw new Error(broken ? broken.message : `no case "${id}" under ${opts.cases}`);
       }
-      const r = await runCase(l, system, {
-        outDir: resolve(opts.out),
-        keepSandbox: opts.keepSandbox,
-        log: (m) => console.error(m),
-      });
-      console.log(`ok    ${l.case.id} -> ${r.path}${r.sandboxRoot ? ` (sandbox ${r.sandboxRoot})` : ''}`);
-    }
+      let failures = 0;
+      for (const l of picked) {
+        const support = system.supports(l);
+        if (!support.supported) {
+          console.log(`skip  ${l.case.id}: ${support.reason}`);
+          continue;
+        }
+        if (opts.skipExisting && existsSync(join(resolve(opts.out), l.case.id, `${system.id}.json`))) {
+          console.log(`skip  ${l.case.id}: artifact exists`);
+          continue;
+        }
+        try {
+          const r = await runCase(l, system, {
+            outDir: resolve(opts.out),
+            keepSandbox: opts.keepSandbox,
+            log: (m) => console.error(m),
+          });
+          const cost = r.artifact.meta.costUsd === undefined ? '' : ` $${r.artifact.meta.costUsd.toFixed(2)}`;
+          console.log(`ok    ${l.case.id} -> ${r.path}${cost}${r.sandboxRoot ? ` (sandbox ${r.sandboxRoot})` : ''}`);
+        } catch (err) {
+          failures++;
+          console.log(`FAIL  ${l.case.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      if (failures) process.exitCode = 1;
+    },
+  );
+
+program
+  .command('judge')
+  .description('Judge every pair of systems on every case with artifacts, in both orders, then write the report')
+  .option('--systems <ids>', 'systems to compare, in report order', SYSTEMS.map((s) => s.id).join(','))
+  .option('--judges <specs>', 'judges: claude[:model], codex[:model]', 'claude,codex')
+  .option('-c, --case <ids>', 'only these cases (comma-separated)')
+  .option('--cases <dir>', 'cases directory', 'cases')
+  .option('--artifacts <dir>', 'artifacts directory', 'results/artifacts')
+  .option('-o, --out <dir>', 'results directory', 'results')
+  .option('-j, --jobs <n>', 'judging calls in parallel', '3')
+  .option('--force', 'judge again even when a cached judgment matches')
+  .action(
+    async (opts: { systems: string; judges: string; case?: string; cases: string; artifacts: string; out: string; jobs: string; force?: boolean }) => {
+      const systems = list(opts.systems);
+      const judges = list(opts.judges).map(parseJudge);
+      const { loaded } = loadAll(resolve(opts.cases));
+      const wanted = opts.case ? list(opts.case) : undefined;
+      const tasks: (() => Promise<PairResult>)[] = [];
+      for (const l of loaded) {
+        if (wanted && !wanted.includes(l.case.id)) continue;
+        const facts = loadFacts(l);
+        if (!facts) {
+          console.log(`skip  ${l.case.id}: no fact sheet`);
+          continue;
+        }
+        const arts = readArtifacts(resolve(opts.artifacts), l.case.id, systems);
+        const present = systems.filter((s) => arts.has(s));
+        if (present.length < 2) {
+          console.log(`skip  ${l.case.id}: fewer than two systems have artifacts (${present.join(', ') || 'none'})`);
+          continue;
+        }
+        for (let i = 0; i < present.length; i++) {
+          for (let k = i + 1; k < present.length; k++) {
+            for (const judge of judges) {
+              tasks.push(async () => {
+                const r = await judgePair({
+                  loaded: l,
+                  facts,
+                  x: arts.get(present[i]!)!,
+                  y: arts.get(present[k]!)!,
+                  judge,
+                  outDir: join(resolve(opts.out), 'judgments'),
+                  force: opts.force,
+                });
+                console.log(`ok    ${r.case} ${r.x} vs ${r.y} [${r.judge}]: ${r.verdict}${r.flipped ? ' (flipped)' : ''}`);
+                return r;
+              });
+            }
+          }
+        }
+      }
+      const { ok, failed } = await pool(Number(opts.jobs), tasks);
+      for (const f of failed) console.log(`FAIL  ${f}`);
+      mkdirSync(resolve(opts.out), { recursive: true });
+      writeFileSync(join(resolve(opts.out), 'pairs.json'), JSON.stringify(ok, null, 2) + '\n');
+      writeReport(ok, loaded, resolve(opts.artifacts), systems, resolve(opts.out));
+      if (failed.length) process.exitCode = 1;
+    },
+  );
+
+function writeReport(results: PairResult[], loaded: LoadedCase[], artifactsDir: string, systems: string[], out: string): void {
+  const used = new Set(results.map((r) => r.case));
+  const facts = new Map<string, Facts>();
+  const artifacts = new Map<string, Map<string, PRArtifact>>();
+  const splitOf = new Map<string, string>();
+  for (const l of loaded) {
+    if (!used.has(l.case.id)) continue;
+    facts.set(l.case.id, loadFacts(l)!);
+    artifacts.set(l.case.id, readArtifacts(artifactsDir, l.case.id, systems));
+    splitOf.set(l.case.id, l.case.split);
+  }
+  const report = buildReport({ results, artifacts, facts, splitOf });
+  writeFileSync(join(out, 'report.json'), JSON.stringify(report, null, 2) + '\n');
+  writeFileSync(join(out, 'report.md'), reportMarkdown(report));
+  console.log(`report: ${join(out, 'report.md')}`);
+}
+
+program
+  .command('report')
+  .description('Rebuild the report from saved pair results')
+  .option('--systems <ids>', 'systems, in report order', SYSTEMS.map((s) => s.id).join(','))
+  .option('--cases <dir>', 'cases directory', 'cases')
+  .option('--artifacts <dir>', 'artifacts directory', 'results/artifacts')
+  .option('-o, --out <dir>', 'results directory', 'results')
+  .action((opts: { systems: string; cases: string; artifacts: string; out: string }) => {
+    const results = JSON.parse(readFileSync(join(resolve(opts.out), 'pairs.json'), 'utf8')) as PairResult[];
+    writeReport(results, loadAll(resolve(opts.cases)).loaded, resolve(opts.artifacts), list(opts.systems), resolve(opts.out));
   });
 
 program
