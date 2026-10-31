@@ -1,0 +1,30 @@
+{
+  "schema": "prbench.case/v1",
+  "id": "example-greet-default",
+  "title": "Default greet() to 'world'",
+  "split": "dev",
+  "mode": "replay",
+  "repo": {
+    "bundle": "repo.bundle",
+    "base": "e868d0200e26fee25d855e4609d190746c949848",
+    "head": "ea7f69d07500f058ac0f8e219dc4e9d74f31ab27"
+  },
+  "task": "greet() prints 'Hello, undefined!' when called without a name. Make it say 'Hello, world!' instead, and treat blank names the same way.",
+  "sessions": [
+    {
+      "agent": "claude-code",
+      "file": "session.jsonl",
+      "cwd": "/work/greet"
+    }
+  ],
+  "facts": "facts.json",
+  "original": {
+    "title": "Greet 'world' when no name is given",
+    "body": "original.md"
+  },
+  "provenance": {
+    "source": "scripts/make-example.ts",
+    "synthetic": true,
+    "notes": "Synthetic case for tests and as a template."
+  }
+}

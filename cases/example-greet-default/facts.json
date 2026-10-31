@@ -1,0 +1,20 @@
+{
+  "schema": "prbench.facts/v1",
+  "claims": [
+    "greet() called without a name now returns 'Hello, world!' instead of 'Hello, undefined!'.",
+    "Empty or whitespace-only names also fall back to 'world'.",
+    "Names are trimmed before use, so greet('  Ada ') returns 'Hello, Ada!'.",
+    "A new test covers the no-name and blank-name cases."
+  ],
+  "context": [
+    "The user reported that greet() printed \"Hello, undefined!\" and asked for \"Hello, world!\" for missing and blank names."
+  ],
+  "uncertainties": [
+    "The trimming of surrounding whitespace in real names is not covered by a test."
+  ],
+  "traps": [
+    "Claiming null is handled differently from other non-strings (it falls back to world like any non-string).",
+    "Claiming the function throws or validates input types.",
+    "Claiming the test suite was run in CI (it was only run locally, once, in the session: 2 pass, 0 fail)."
+  ]
+}
