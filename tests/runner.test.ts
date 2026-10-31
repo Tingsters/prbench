@@ -28,6 +28,24 @@ describe('runCase', () => {
     expect(readdirSync(parent)).toEqual([]);
   });
 
+  test('systems get the case without its fact sheet', async () => {
+    let seen: unknown;
+    const spy: System = {
+      id: 'spy',
+      description: 'test double',
+      supports: () => ({ supported: true }),
+      async run(ctx) {
+        seen = ctx.loaded.case;
+        const a = await original.run(ctx);
+        return { ...a, system: 'spy' };
+      },
+    };
+    expect(loaded.case.facts).toBe('facts.json');
+    await runCase(loaded, spy, { sandboxParent: tempDir() });
+    expect(seen).not.toHaveProperty('facts');
+    expect(loaded.case.facts).toBe('facts.json'); // the caller's copy is untouched
+  });
+
   test('refuses cases a system does not support', async () => {
     const { dir } = copyExample('no-original', (c) => delete c.original);
     await expect(runCase(loadCase(dir), original)).rejects.toThrow(/case has no original PR/);
@@ -79,7 +97,7 @@ describe('cli', () => {
   });
 
   test('run explains unknown systems and cases', () => {
-    expect(cli('run', '-s', 'nope').stderr).toContain('unknown system "nope" (known: original)');
+    expect(cli('run', '-s', 'nope').stderr).toContain('unknown system "nope" (known: original, claude-native, tracetoon)');
     expect(cli('run', '-s', 'original', '-c', 'missing').stderr).toContain('no case "missing"');
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadCase } from '../src/schema/case.ts';
-import { claudeProjectDir, createSandbox, rewritePaths } from '../src/run/sandbox.ts';
+import { claudeProjectDir, createSandbox, pathPairs, rewritePaths } from '../src/run/sandbox.ts';
 import { exec, git } from '../src/util/exec.ts';
 import { EXAMPLE, tempDir } from './helpers.ts';
 
@@ -17,17 +17,58 @@ describe('rewritePaths', () => {
     const from = 'C:\\Users\\ada\\repo';
     const to = 'D:\\tmp\\sb\\repo';
     const line = JSON.stringify({ cwd: from, file: `${from}\\a.ts`, alt: 'C:/Users/ada/repo/b.ts' });
-    expect(JSON.parse(rewritePaths(line, from, to))).toEqual({
+    expect(JSON.parse(rewritePaths(line, [[from, to]]))).toEqual({
       cwd: to,
       file: `${to}\\a.ts`,
       alt: 'D:/tmp/sb/repo/b.ts',
     });
   });
 
-  test('rewrites a POSIX path and leaves other text alone', () => {
-    const line = JSON.stringify({ cwd: '/work/greet', other: '/work/greeter-two' });
-    // A prefix match is still rewritten: recorded paths are compared as text, like the tools that read them.
-    expect(JSON.parse(rewritePaths(line, '/work/greet', '/sb/repo'))).toEqual({ cwd: '/sb/repo', other: '/sb/repoer-two' });
+  test('rewrites whole paths only', () => {
+    const line = JSON.stringify({
+      cwd: '/work/greet',
+      cmd: 'cd /work/greet && ls',
+      longer: '/work/greeter-two',
+      inside: '.github/workflows/ci.yml',
+      nested: '/home/x/work/greet',
+    });
+    expect(JSON.parse(rewritePaths(line, [['/work/greet', '/sb/repo'], ['/work', '/sb']]))).toEqual({
+      cwd: '/sb/repo',
+      cmd: 'cd /sb/repo && ls',
+      longer: '/sb/greeter-two',
+      inside: '.github/workflows/ci.yml',
+      nested: '/home/x/work/greet',
+    });
+  });
+
+  test('maps a repository and its parent, longest first', () => {
+    const line = JSON.stringify({
+      cwd: 'C:\\dev',
+      a: 'C:\\dev\\tool\\src\\x.ts',
+      b: 'C:\\dev\\other\\y.ts',
+      c: 'cd tool && git log',
+    });
+    const pairs = pathPairs(
+      { repo: { recordedPath: 'C:\\dev\\tool' }, sessions: [{ cwd: 'C:\\dev' }] } as never,
+      'D:\\sb\\work\\tool',
+    );
+    expect(pairs).toEqual([
+      ['C:\\dev\\tool', 'D:\\sb\\work\\tool'],
+      ['C:\\dev', 'D:\\sb\\work'],
+    ]);
+    expect(JSON.parse(rewritePaths(line, pairs))).toEqual({
+      cwd: 'D:\\sb\\work',
+      a: 'D:\\sb\\work\\tool\\src\\x.ts',
+      b: 'D:\\sb\\work\\other\\y.ts',
+      c: 'cd tool && git log',
+    });
+  });
+
+  test('never maps a drive or filesystem root', () => {
+    expect(pathPairs({ repo: {}, sessions: [{ cwd: 'C:\\repo' }] } as never, 'D:\\sb\\work\\repo')).toEqual([
+      ['C:\\repo', 'D:\\sb\\work\\repo'],
+    ]);
+    expect(pathPairs({ repo: {}, sessions: [{ cwd: '/repo' }] } as never, '/sb/work/repo')).toEqual([['/repo', '/sb/work/repo']]);
   });
 
   test('claudeProjectDir matches Claude Code naming', () => {
@@ -50,6 +91,12 @@ describe('createSandbox', () => {
       expect(git(['symbolic-ref', 'refs/remotes/origin/HEAD'], sb.repo)).toBe('refs/remotes/origin/main');
       expect(git(['rev-list', '--count', 'main..HEAD'], sb.repo)).toBe('1');
       expect(git(['status', '--porcelain'], sb.repo)).toBe('');
+      expect(git(['for-each-ref', '--format=%(refname)'], sb.repo).split('\n').sort()).toEqual([
+        'refs/heads/main',
+        'refs/heads/prbench/example-greet-default',
+        'refs/remotes/origin/HEAD',
+        'refs/remotes/origin/main',
+      ]);
     } finally {
       sb.dispose();
     }
@@ -66,6 +113,8 @@ describe('createSandbox', () => {
       expect(sb.env.USERPROFILE).toBe(sb.home);
       expect(sb.env.CODEX_HOME).toBe(sb.codexHome);
       expect(sb.env.GH_TOKEN).toBeUndefined();
+      for (const k of ['APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME']) expect(sb.env[k]!.startsWith(sb.root)).toBe(true);
+      expect(sb.repo).toBe(join(sb.root, 'work', 'greet'));
       expect(existsSync(join(sb.root, 'facts.json'))).toBe(false);
     } finally {
       sb.dispose();
@@ -80,6 +129,11 @@ describe('createSandbox', () => {
       const push = exec(['git', 'push', '--quiet', 'origin', sb.branch], { cwd: sb.repo, env: sb.env });
       expect(push.code).toBe(0);
       expect(git(['rev-parse', `refs/heads/${sb.branch}`], sb.remote)).toBe(head!);
+
+      // The fetch URL looks like GitHub, but git may only use local repositories.
+      const fetch = exec(['git', 'fetch', 'origin'], { cwd: sb.repo, env: sb.env });
+      expect(fetch.code).not.toBe(0);
+      expect(fetch.stderr).toMatch(/transport 'https' not allowed/);
 
       const r = gh(['pr', 'create', '--title', 'A title', '--body-file', bodyFile, '--base', 'main', '--draft'], sb.env, sb.repo);
       expect(r.stderr).toBe('');

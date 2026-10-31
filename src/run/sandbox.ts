@@ -1,19 +1,23 @@
 // A throwaway environment for one system run on one case:
 //
-//   <root>/repo         the case's repository, checked out on a work branch
+//   <root>/work/<name>  the case's repository, checked out on a work branch
+//                       (<name> is the recorded repository's directory name)
 //   <root>/remote.git   a bare repo that receives every push
 //   <root>/home         HOME / USERPROFILE, holding only the case's sessions
 //   <root>/codex        CODEX_HOME
+//   <root>/appdata      APPDATA, LOCALAPPDATA and XDG_* directories
 //   <root>/bin          a fake `gh` that records PRs instead of posting them
 //
 // The checkout has `main` and `origin/main` at the case's base commit, so
-// tools see an ordinary feature branch. Nothing the run does can reach the
-// user's real home directory, agent logs or GitHub account through these
-// paths. (A determined process could still use absolute paths; the sandbox
-// isolates discovery, it is not a security boundary.)
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+// tools see an ordinary feature branch. Git may only use local repositories
+// (GIT_ALLOW_PROTOCOL=file), so a fetch can't reach the network. Nothing the
+// run does can reach the user's real home directory, agent logs or GitHub
+// account through these paths. (A determined process could still use
+// absolute paths; the sandbox isolates discovery, it is not a security
+// boundary.)
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, delimiter, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import type { Case, CaseSession, LoadedCase } from '../schema/case.ts';
 import { git } from '../util/exec.ts';
 
@@ -66,17 +70,40 @@ export function claudeProjectDir(path: string): string {
 }
 
 /**
- * Rewrites a recorded working directory to `to` wherever it appears inside
- * JSON strings, in both its native and forward-slash spelling.
+ * Rewrites recorded paths wherever they appear inside JSON strings, in both
+ * native and forward-slash spelling. Longer paths win, and each occurrence is
+ * rewritten once, so a repository path and its parent can both be mapped.
  */
-export function rewritePaths(jsonl: string, from: string, to: string): string {
+export function rewritePaths(jsonl: string, pairs: [from: string, to: string][]): string {
   const esc = (s: string) => JSON.stringify(s).slice(1, -1);
-  const pairs: [string, string][] = [[from, to]];
-  const fwdFrom = from.replace(/\\/g, '/');
-  if (fwdFrom !== from) pairs.push([fwdFrom, to.replace(/\\/g, '/')]);
-  let out = jsonl;
-  for (const [f, t] of pairs) out = out.split(esc(f)).join(esc(t));
-  return out;
+  const map = new Map<string, string>();
+  for (const [from, to] of pairs) {
+    map.set(esc(from), esc(to));
+    const fwd = from.replace(/\\/g, '/');
+    if (fwd !== from) map.set(esc(fwd), esc(to.replace(/\\/g, '/')));
+  }
+  const keys = [...map.keys()].sort((a, b) => b.length - a.length);
+  if (keys.length === 0) return jsonl;
+  // Whole paths only: not preceded by a path character, and followed by a
+  // separator, a quote or the end, so "/work" doesn't match ".github/workflows".
+  const alt = keys.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const re = new RegExp(`(?<![\\w.\\-~/\\\\])(?:${alt})(?=[\\\\/"'\`\\s]|$)`, 'g');
+  return jsonl.replace(re, (m) => map.get(m)!);
+}
+
+/** Where a case's repository was recorded, falling back to the first session's cwd. */
+export function recordedPath(c: Case): string | undefined {
+  return c.repo.recordedPath ?? c.sessions?.[0]?.cwd;
+}
+
+/** Path pairs that map the recorded repository and its parent onto the sandbox checkout and its parent. */
+export function pathPairs(c: Case, repo: string): [string, string][] {
+  const rec = recordedPath(c);
+  if (!rec) return [];
+  const pairs: [string, string][] = [[rec, repo]];
+  const parent = rec.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]+$/, '');
+  if (parent && parent !== rec && !/^[A-Za-z]:$|^$/.test(parent)) pairs.push([parent, dirname(repo)]);
+  return pairs;
 }
 
 function repoSource(loaded: LoadedCase): string {
@@ -84,15 +111,35 @@ function repoSource(loaded: LoadedCase): string {
   return r.bundle ? resolve(loaded.dir, r.bundle) : r.url!;
 }
 
-function placeSession(sb: { home: string; codexHome: string; repo: string }, loaded: LoadedCase, s: CaseSession): string {
-  const text = rewritePaths(readFileSync(join(loaded.dir, s.file), 'utf8'), s.cwd, sb.repo);
-  const dir =
-    s.agent === 'claude-code'
-      ? join(sb.home, '.claude', 'projects', claudeProjectDir(sb.repo))
-      : join(sb.codexHome, 'sessions', 'prbench');
+function firstTimestamp(jsonl: string): Date {
+  for (const line of jsonl.split('\n', 50)) {
+    const m = /"timestamp"\s*:\s*"([^"]+)"/.exec(line);
+    if (m && !Number.isNaN(Date.parse(m[1]!))) return new Date(m[1]!);
+  }
+  return new Date();
+}
+
+function placeSession(
+  sb: { home: string; codexHome: string },
+  loaded: LoadedCase,
+  s: CaseSession,
+  pairs: [string, string][],
+): string {
+  const text = rewritePaths(readFileSync(join(loaded.dir, s.file), 'utf8'), pairs);
+  const cwd = rewritePaths(JSON.stringify(s.cwd), pairs);
+  let dir: string;
+  let name = basename(s.file);
+  if (s.agent === 'claude-code') {
+    dir = join(sb.home, '.claude', 'projects', claudeProjectDir(JSON.parse(cwd)));
+  } else {
+    // Codex keeps rollouts under sessions/YYYY/MM/DD/rollout-*.jsonl.
+    const d = firstTimestamp(text);
+    const p = (n: number) => String(n).padStart(2, '0');
+    dir = join(sb.codexHome, 'sessions', String(d.getUTCFullYear()), p(d.getUTCMonth() + 1), p(d.getUTCDate()));
+    if (!name.startsWith('rollout-')) name = `rollout-${name}`;
+  }
   mkdirSync(dir, { recursive: true });
-  const name = basename(s.file);
-  const dest = join(dir, s.agent === 'codex' && !name.startsWith('rollout-') ? `rollout-${name}` : name);
+  const dest = join(dir, name);
   writeFileSync(dest, text);
   return dest;
 }
@@ -106,21 +153,40 @@ function writeGhShims(bin: string): void {
   writeFileSync(join(bin, 'gh.cmd'), `@"${bun}" "${FAKE_GH}" %*\r\n`);
 }
 
+const DROPPED_ENV = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+  'CODEX_HOME',
+  'CLAUDE_CONFIG_DIR',
+  'TRACETOON_CONFIG',
+];
+
 function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: string }, c: Case): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   // Windows env names are case-insensitive; drop every spelling of PATH first.
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
   const path = env[pathKey] ?? '';
-  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH') delete env[k];
-  for (const k of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'CODEX_HOME']) delete env[k];
+  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || DROPPED_ENV.includes(k)) delete env[k];
+  const appdata = join(sb.root, 'appdata');
+  for (const d of ['roaming', 'local', 'config', 'data', 'state', 'cache']) mkdirSync(join(appdata, d), { recursive: true });
   Object.assign(env, {
     [pathKey]: `${sb.bin}${delimiter}${path}`,
     HOME: sb.home,
     USERPROFILE: sb.home,
     CODEX_HOME: sb.codexHome,
+    APPDATA: join(appdata, 'roaming'),
+    LOCALAPPDATA: join(appdata, 'local'),
+    XDG_CONFIG_HOME: join(appdata, 'config'),
+    XDG_DATA_HOME: join(appdata, 'data'),
+    XDG_STATE_HOME: join(appdata, 'state'),
+    XDG_CACHE_HOME: join(appdata, 'cache'),
     GIT_CONFIG_GLOBAL: join(sb.home, '.gitconfig'),
     GIT_CONFIG_NOSYSTEM: '1',
+    GIT_ALLOW_PROTOCOL: 'file',
+    GIT_TERMINAL_PROMPT: '0',
     GH_PROMPT_DISABLED: '1',
     PRBENCH_GH_CAPTURE: join(sb.root, 'gh-calls.jsonl'),
     PRBENCH_GH_REPO: `prbench-sandbox/${c.id}`,
@@ -133,8 +199,11 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
   const c = loaded.case;
   const parent = opts.parent ?? tmpdir();
   mkdirSync(parent, { recursive: true });
-  const root = mkdtempSync(join(parent, `prbench-${c.id}-`));
-  const repo = join(root, 'repo');
+  // The long form of the path: Windows temp dirs often come back in 8.3 form
+  // (C:\Users\ABCDEF~1), which agents and the rewritten logs would spell differently.
+  const root = realpathSync.native(mkdtempSync(join(parent, `prbench-${c.id}-`)));
+  const rec = recordedPath(c);
+  const repo = join(root, 'work', rec ? basename(rec.replace(/[\\/]+$/, '')) || 'repo' : 'repo');
   const remote = join(root, 'remote.git');
   const home = join(root, 'home');
   const codexHome = join(root, 'codex');
@@ -145,16 +214,20 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
   try {
     mkdirSync(home, { recursive: true });
     mkdirSync(codexHome, { recursive: true });
+    mkdirSync(dirname(repo), { recursive: true });
     writeFileSync(join(home, '.gitconfig'), '[user]\n\tname = prbench\n\temail = prbench@example.invalid\n[init]\n\tdefaultBranch = main\n');
 
-    git(['clone', '--quiet', '--no-checkout', repoSource(loaded), repo]);
+    // Fetch every ref, not just branches and tags as a clone would: a case's
+    // bundle may keep its commits under any ref.
+    git(['init', '--quiet', '--initial-branch', 'prbench-empty', repo]);
     git(['config', 'user.name', 'prbench'], repo);
     git(['config', 'user.email', 'prbench@example.invalid'], repo);
     git(['config', 'core.autocrlf', 'false'], repo);
+    git(['fetch', '--quiet', '--no-tags', repoSource(loaded), '+refs/*:refs/prbench-source/*'], repo);
     git(['init', '--quiet', '--bare', remote]);
 
     // Model "a feature branch off main": main and origin/main sit at base.
-    git(['remote', 'set-url', 'origin', `https://github.com/prbench-sandbox/${c.id}.git`], repo);
+    git(['remote', 'add', 'origin', `https://github.com/prbench-sandbox/${c.id}.git`], repo);
     git(['remote', 'set-url', '--push', 'origin', remote], repo);
     git(['push', '--quiet', remote, `${c.repo.base}:refs/heads/main`], repo);
     git(['update-ref', 'refs/remotes/origin/main', c.repo.base], repo);
@@ -163,10 +236,14 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
     git(['checkout', '--quiet', '-B', branch, start], repo);
     if (branch !== 'main') git(['branch', '--quiet', '--force', 'main', c.repo.base], repo);
     git(['branch', '--quiet', '--set-upstream-to', 'origin/main', 'main'], repo);
+    for (const ref of git(['for-each-ref', '--format=%(refname)', 'refs/prbench-source/'], repo).split('\n').filter(Boolean)) {
+      git(['update-ref', '-d', ref], repo);
+    }
 
     writeGhShims(bin);
     const sb = { root, repo, home, codexHome, bin };
-    const sessions = (c.sessions ?? []).map((s) => placeSession(sb, loaded, s));
+    const pairs = pathPairs(c, repo);
+    const sessions = (c.sessions ?? []).map((s) => placeSession(sb, loaded, s, pairs));
     const env = sandboxEnv(sb, c);
     const capture = env.PRBENCH_GH_CAPTURE!;
 

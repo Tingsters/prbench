@@ -4,7 +4,10 @@ import type { Sandbox } from '../run/sandbox.ts';
 
 /**
  * What a system gets to work with. The case's fact sheet is deliberately not
- * here: it is the answer key, and the sandbox doesn't contain it either.
+ * here: it is the answer key. `loaded.case.facts` is removed, the sandbox
+ * doesn't contain it, and adapters must not read other files from the case
+ * directory than the ones the case names for systems (bundle, sessions,
+ * original PR).
  */
 export interface RunContext {
   loaded: LoadedCase;
