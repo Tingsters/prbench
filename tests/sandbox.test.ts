@@ -1,0 +1,122 @@
+import { describe, expect, test } from 'bun:test';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { loadCase } from '../src/schema/case.ts';
+import { claudeProjectDir, createSandbox, rewritePaths } from '../src/run/sandbox.ts';
+import { exec, git } from '../src/util/exec.ts';
+import { EXAMPLE, tempDir } from './helpers.ts';
+
+/** Runs `gh` the way an agent's shell would find it: through PATH. */
+function gh(args: string[], env: Record<string, string>, cwd: string) {
+  const cmd = process.platform === 'win32' ? ['cmd', '/d', '/c', 'gh', ...args] : ['gh', ...args];
+  return exec(cmd, { env, cwd });
+}
+
+describe('rewritePaths', () => {
+  test('rewrites a Windows path in both spellings inside JSON strings', () => {
+    const from = 'C:\\Users\\ada\\repo';
+    const to = 'D:\\tmp\\sb\\repo';
+    const line = JSON.stringify({ cwd: from, file: `${from}\\a.ts`, alt: 'C:/Users/ada/repo/b.ts' });
+    expect(JSON.parse(rewritePaths(line, from, to))).toEqual({
+      cwd: to,
+      file: `${to}\\a.ts`,
+      alt: 'D:/tmp/sb/repo/b.ts',
+    });
+  });
+
+  test('rewrites a POSIX path and leaves other text alone', () => {
+    const line = JSON.stringify({ cwd: '/work/greet', other: '/work/greeter-two' });
+    // A prefix match is still rewritten: recorded paths are compared as text, like the tools that read them.
+    expect(JSON.parse(rewritePaths(line, '/work/greet', '/sb/repo'))).toEqual({ cwd: '/sb/repo', other: '/sb/repoer-two' });
+  });
+
+  test('claudeProjectDir matches Claude Code naming', () => {
+    expect(claudeProjectDir('C:\\Users\\cassandra\\Development\\tracetoon')).toBe('C--Users-cassandra-Development-tracetoon');
+    expect(claudeProjectDir('/home/ada/my.repo')).toBe('-home-ada-my-repo');
+  });
+});
+
+describe('createSandbox', () => {
+  const loaded = loadCase(EXAMPLE);
+  const { base, head } = loaded.case.repo;
+
+  test('checks out the change as a feature branch off main', () => {
+    const sb = createSandbox(loaded, { parent: tempDir() });
+    try {
+      expect(git(['rev-parse', 'HEAD'], sb.repo)).toBe(head!);
+      expect(git(['branch', '--show-current'], sb.repo)).toBe('prbench/example-greet-default');
+      expect(git(['rev-parse', 'main'], sb.repo)).toBe(base);
+      expect(git(['rev-parse', 'origin/main'], sb.repo)).toBe(base);
+      expect(git(['symbolic-ref', 'refs/remotes/origin/HEAD'], sb.repo)).toBe('refs/remotes/origin/main');
+      expect(git(['rev-list', '--count', 'main..HEAD'], sb.repo)).toBe('1');
+      expect(git(['status', '--porcelain'], sb.repo)).toBe('');
+    } finally {
+      sb.dispose();
+    }
+  });
+
+  test('places sessions where the agent looks and points them at the sandbox checkout', () => {
+    const sb = createSandbox(loaded, { parent: tempDir() });
+    try {
+      expect(sb.sessions).toEqual([join(sb.home, '.claude', 'projects', claudeProjectDir(sb.repo), 'session.jsonl')]);
+      const lines = readFileSync(sb.sessions[0]!, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+      expect(lines.every((l) => l.cwd === sb.repo)).toBe(true);
+      expect(readFileSync(sb.sessions[0]!, 'utf8')).not.toContain('/work/greet');
+      expect(sb.env.HOME).toBe(sb.home);
+      expect(sb.env.USERPROFILE).toBe(sb.home);
+      expect(sb.env.CODEX_HOME).toBe(sb.codexHome);
+      expect(sb.env.GH_TOKEN).toBeUndefined();
+      expect(existsSync(join(sb.root, 'facts.json'))).toBe(false);
+    } finally {
+      sb.dispose();
+    }
+  });
+
+  test('captures PRs through a fake gh and sends pushes to a local remote', () => {
+    const sb = createSandbox(loaded, { parent: tempDir() });
+    try {
+      const bodyFile = join(sb.root, 'body.md');
+      writeFileSync(bodyFile, 'The body\n');
+      const push = exec(['git', 'push', '--quiet', 'origin', sb.branch], { cwd: sb.repo, env: sb.env });
+      expect(push.code).toBe(0);
+      expect(git(['rev-parse', `refs/heads/${sb.branch}`], sb.remote)).toBe(head!);
+
+      const r = gh(['pr', 'create', '--title', 'A title', '--body-file', bodyFile, '--base', 'main', '--draft'], sb.env, sb.repo);
+      expect(r.stderr).toBe('');
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe('https://github.com/prbench-sandbox/example-greet-default/pull/1');
+      expect(sb.capturedPRs()).toEqual([
+        {
+          number: 1,
+          url: 'https://github.com/prbench-sandbox/example-greet-default/pull/1',
+          title: 'A title',
+          body: 'The body\n',
+          base: 'main',
+          draft: true,
+        },
+      ]);
+
+      const second = gh(['pr', 'create', '--title=Again', '--body', 'inline'], sb.env, sb.repo);
+      expect(second.stdout.trim()).toEndWith('/pull/2');
+      expect(sb.capturedPRs()[1]).toMatchObject({ number: 2, title: 'Again', body: 'inline', draft: false });
+
+      const odd = gh(['release', 'create', 'v1'], sb.env, sb.repo);
+      expect(odd.code).toBe(1);
+      expect(odd.stderr).toContain('unsupported command');
+      expect(sb.ghCalls().at(-1)).toMatchObject({ args: ['release', 'create', 'v1'], ok: false, unsupported: true });
+    } finally {
+      sb.dispose();
+    }
+  });
+
+  test('dispose removes everything, and a failed setup leaves nothing behind', () => {
+    const parent = tempDir();
+    const sb = createSandbox(loaded, { parent });
+    sb.dispose();
+    expect(existsSync(sb.root)).toBe(false);
+
+    const broken = { ...loaded, case: { ...loaded.case, repo: { ...loaded.case.repo, head: 'f'.repeat(40) } } };
+    expect(() => createSandbox(broken, { parent })).toThrow(/git checkout/);
+    expect(readdirSync(parent)).toEqual([]);
+  });
+});
