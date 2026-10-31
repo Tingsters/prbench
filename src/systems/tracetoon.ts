@@ -70,13 +70,12 @@ export function tracetoonSystem(options: Partial<AgentOptions> = {}): System {
     async run({ loaded, sandbox, log }) {
       const started = Date.now();
       const tt = installTracetoon(sandbox);
-      const launcher = join(tt.skill, 'bin', 'tracetoon');
       const run = await runClaude(sandbox, {
         prompt: PR_PROMPT,
         model: o.model,
-        // The shared list plus the launcher's absolute path, and access to the
-        // skill folder, which lies outside the working directory.
-        allowedTools: [...AGENT_TOOLS, `Bash(${launcher.replace(/\\/g, '/')}:*)`, `Bash(${launcher}:*)`],
+        allowedTools: AGENT_TOOLS,
+        // Like the baseline, plus the skill folder, which lies outside the
+        // working directory.
         addDirs: [sandbox.gitDir, tt.skill],
         disallowedTools: DISALLOWED_TOOLS,
         maxBudgetUsd: o.maxBudgetUsd,

@@ -23,28 +23,16 @@ export const DISALLOWED_TOOLS = ['PowerShell'];
 /**
  * Tools every agent system may use without asking; anything else is denied.
  * The list is the same for every system so they differ only in what is
- * installed. (`tracetoon` rules do nothing where Tracetoon isn't installed.)
+ * installed.
+ *
+ * Bash is allowed without restriction (decided 2026-10-31 with the project
+ * owner). Shell allow-lists proved too brittle for unattended runs: Tracetoon
+ * calls its launcher in several spellings and the repositories' checks run
+ * their own tools, and every unlisted call needs an approval nobody can give.
+ * Agents run as the user with the sandbox's home directory; the sandbox is not
+ * a security boundary.
  */
-export const AGENT_TOOLS = [
-  'Read',
-  'Glob',
-  'Grep',
-  'Write',
-  'Edit',
-  'Agent',
-  'Task',
-  'Bash(git:*)',
-  'Bash(gh:*)',
-  'Bash(ls:*)',
-  'Bash(cat:*)',
-  'Bash(head:*)',
-  'Bash(tail:*)',
-  'Bash(wc:*)',
-  'Bash(sha256sum:*)',
-  'Bash(tracetoon:*)',
-  'Bash(~/.claude/skills/tracetoon/bin/tracetoon:*)',
-  'Bash($HOME/.claude/skills/tracetoon/bin/tracetoon:*)',
-];
+export const AGENT_TOOLS = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Agent', 'Task', 'Bash'];
 
 export interface AgentOptions {
   model: string;

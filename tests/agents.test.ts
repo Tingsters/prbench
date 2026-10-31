@@ -101,10 +101,9 @@ describe('agent systems', () => {
     expect(JSON.parse(readFileSync(call.tracetoonConfig, 'utf8'))).toEqual({ comic: 'off' });
     expect(existsSync(join(sandboxRoot!, 'home', '.claude', 'skills', 'tracetoon', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(sandboxRoot!, 'home', '.claude', 'settings.json'))).toBe(true);
-    const tools: string = call.args[call.args.indexOf('--allowedTools') + 1];
-    expect(tools.startsWith(AGENT_TOOLS.join(','))).toBe(true); // same base list as the baseline
+    // Exactly the baseline's tools.
+    expect(call.args[call.args.indexOf('--allowedTools') + 1]).toBe(AGENT_TOOLS.join(','));
     expect(call.args[call.args.indexOf('--disallowedTools') + 1]).toBe('PowerShell');
-    expect(tools).toContain('/home/.claude/skills/tracetoon/bin/tracetoon:*)');
     expect(call.args.filter((a: string, i: number) => call.args[i - 1] === '--add-dir')).toEqual([
       join(sandboxRoot!, 'git'),
       join(sandboxRoot!, 'home', '.claude', 'skills', 'tracetoon'),

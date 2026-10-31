@@ -32,7 +32,13 @@ Both agent systems get the same request, word for word (`PR_PROMPT` in `src/syst
 
 A sandbox has its own `HOME`, so Claude Code can't use the user's normal login there. Copying `~/.claude/.credentials.json` in would be unsafe: a token refresh inside the sandbox could sign the user out. Agent systems instead use a long-lived token from `claude setup-token`, read from `~/.prbench/claude-oauth-token` or `PRBENCH_CLAUDE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`). See `src/agents/claude.ts`.
 
-Agents run with `--permission-mode acceptEdits` and an explicit tool list; anything else is denied. `claude-native` may read files and run `git` and `gh`. `tracetoon` may also write files, start subagents and run `tracetoon`.
+**Permissions.** Both agent systems get exactly the same tools: read, search, write and edit files, start subagents, and run any shell command (`AGENT_TOOLS` in `src/systems/agentShared.ts`), with `--permission-mode acceptEdits`. PowerShell is off, because Claude Code's PowerShell tool fails inside sandboxes on Windows. Anything else is denied, since nobody can approve it.
+
+Trial runs showed why the shell is open. With an allow-list of commands, Tracetoon called its launcher in spellings the list didn't cover, and the repositories' checks ran their own tools. Each unlisted call needed an approval, so the run stalled. The project owner chose to allow any shell command (2026-10-31). Agents therefore run as the user. The sandbox redirects their home directory but is not a security boundary.
+
+**Unattended.** The shared request tells both agents that nobody can answer questions and that anything the sandbox can't do should be noted, not asked about. Without that, a trial Tracetoon run stopped to ask what to do about checks it couldn't run (the sandbox has no installed dependencies).
+
+**The git directory.** Claude Code won't let an unattended agent write under a `.git/` path, but Tracetoon keeps its run folder in the git directory. So the sandbox keeps its git directory outside the checkout, and both systems may use it.
 
 ## Sandbox
 
