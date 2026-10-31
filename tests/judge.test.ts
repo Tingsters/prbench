@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ARTIFACT_SCHEMA, type PRArtifact } from '../src/schema/artifact.ts';
@@ -10,7 +10,9 @@ import { buildPrompt, checkJudgment, JUDGMENT_SCHEMA, RUBRIC_KEYS, type Judgment
 import { agreedResults, buildReport, reportMarkdown } from '../src/report.ts';
 import { bootstrapMeanCI, cohenKappa, signTest } from '../src/stats.ts';
 import { parseBudget } from '../src/systems/agentShared.ts';
-import { EXAMPLE, tempDir } from './helpers.ts';
+import { cleanupTemps, EXAMPLE, tempDir } from './helpers.ts';
+
+afterAll(cleanupTemps);
 
 const facts: Facts = {
   schema: FACTS_SCHEMA,

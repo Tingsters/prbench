@@ -11,6 +11,26 @@ import { exec } from '../util/exec.ts';
  */
 export const PR_PROMPT = 'The work on this branch is done. Open a pull request for it.';
 
+/**
+ * Tools every agent system may use without asking; anything else is denied.
+ * The list is the same for every system so they differ only in what is
+ * installed. (`tracetoon` rules do nothing where Tracetoon isn't installed.)
+ */
+export const AGENT_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'Write',
+  'Edit',
+  'Agent',
+  'Task',
+  'Bash(git:*)',
+  'Bash(gh:*)',
+  'Bash(tracetoon:*)',
+  'Bash(~/.claude/skills/tracetoon/bin/tracetoon:*)',
+  'Bash($HOME/.claude/skills/tracetoon/bin/tracetoon:*)',
+];
+
 export interface AgentOptions {
   model: string;
   /** Spending cap per run; undefined means no cap. */

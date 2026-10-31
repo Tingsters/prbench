@@ -3,10 +3,16 @@
 // sandbox, as they would be on the user's machine, but nothing points the
 // agent at them.
 import { claudeCommand, describeRun, runClaude } from '../agents/claude.ts';
-import { agentArtifact, claudeVersion, DEFAULT_AGENT_OPTIONS, PR_PROMPT, replaySupport, type AgentOptions } from './agentShared.ts';
+import {
+  AGENT_TOOLS,
+  agentArtifact,
+  claudeVersion,
+  DEFAULT_AGENT_OPTIONS,
+  PR_PROMPT,
+  replaySupport,
+  type AgentOptions,
+} from './agentShared.ts';
 import type { System } from './types.ts';
-
-export const NATIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash(git:*)', 'Bash(gh:*)'];
 
 export function claudeNative(options: Partial<AgentOptions> = {}): System {
   const o = { ...DEFAULT_AGENT_OPTIONS, ...options };
@@ -19,7 +25,7 @@ export function claudeNative(options: Partial<AgentOptions> = {}): System {
       const run = await runClaude(sandbox, {
         prompt: PR_PROMPT,
         model: o.model,
-        allowedTools: NATIVE_TOOLS,
+        allowedTools: AGENT_TOOLS,
         maxBudgetUsd: o.maxBudgetUsd,
         timeoutMs: o.timeoutMs,
         env: { TRACETOON: '0' },

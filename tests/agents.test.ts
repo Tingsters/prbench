@@ -5,9 +5,11 @@ import { claudeAuthEnv } from '../src/agents/claude.ts';
 import { loadCase } from '../src/schema/case.ts';
 import { runCase } from '../src/run/runner.ts';
 import { claudeNative } from '../src/systems/claudeNative.ts';
-import { PR_PROMPT } from '../src/systems/agentShared.ts';
+import { AGENT_TOOLS, PR_PROMPT } from '../src/systems/agentShared.ts';
 import { tracetoonSystem } from '../src/systems/tracetoon.ts';
-import { EXAMPLE, tempDir } from './helpers.ts';
+import { cleanupTemps, EXAMPLE, tempDir } from './helpers.ts';
+
+afterAll(cleanupTemps);
 
 const fixtures = join(import.meta.dir, 'fixtures');
 const saved: Record<string, string | undefined> = {};
@@ -70,7 +72,8 @@ describe('agent systems', () => {
     expect(call.tracetoonOff).toBe('0');
     expect(call.home).toContain('prbench-example-greet-default-');
     expect(call.args).toEqual(expect.arrayContaining(['-p', '--model', 'sonnet', '--permission-mode', 'acceptEdits']));
-    expect(call.args[call.args.indexOf('--allowedTools') + 1]).toBe('Read,Glob,Grep,Bash(git:*),Bash(gh:*)');
+    expect(call.args[call.args.indexOf('--allowedTools') + 1]).toBe(AGENT_TOOLS.join(','));
+    expect(call.args).not.toContain('--add-dir');
 
     expect(artifact.system).toBe('claude-native');
     expect(artifact.title).toBe('Fallback to world');
@@ -97,7 +100,10 @@ describe('agent systems', () => {
     expect(JSON.parse(readFileSync(call.tracetoonConfig, 'utf8'))).toEqual({ comic: 'off' });
     expect(existsSync(join(sandboxRoot!, 'home', '.claude', 'skills', 'tracetoon', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(sandboxRoot!, 'home', '.claude', 'settings.json'))).toBe(true);
-    expect(call.args[call.args.indexOf('--allowedTools') + 1]).toContain('Bash(tracetoon:*)');
+    const tools: string = call.args[call.args.indexOf('--allowedTools') + 1];
+    expect(tools.startsWith(AGENT_TOOLS.join(','))).toBe(true); // same base list as the baseline
+    expect(tools).toContain('/home/.claude/skills/tracetoon/bin/tracetoon:*)');
+    expect(call.args[call.args.indexOf('--add-dir') + 1]).toBe(join(sandboxRoot!, 'home', '.claude', 'skills', 'tracetoon'));
 
     expect(artifact.title).toBe("Greet 'world' when no name is given");
     expect(artifact.body).toContain('greet() now falls back to world.');

@@ -1,10 +1,12 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadCase } from '../src/schema/case.ts';
 import { claudeProjectDir, createSandbox, pathPairs, rewritePaths } from '../src/run/sandbox.ts';
 import { exec, git } from '../src/util/exec.ts';
-import { EXAMPLE, tempDir } from './helpers.ts';
+import { cleanupTemps, EXAMPLE, tempDir } from './helpers.ts';
+
+afterAll(cleanupTemps);
 
 /** Runs `gh` the way an agent's shell would find it: through PATH. */
 function gh(args: string[], env: Record<string, string>, cwd: string) {

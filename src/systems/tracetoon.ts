@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { describeRun, runClaude } from '../agents/claude.ts';
 import type { Sandbox } from '../run/sandbox.ts';
 import { exec } from '../util/exec.ts';
-import { agentArtifact, DEFAULT_AGENT_OPTIONS, PR_PROMPT, replaySupport, type AgentOptions } from './agentShared.ts';
+import { AGENT_TOOLS, agentArtifact, DEFAULT_AGENT_OPTIONS, PR_PROMPT, replaySupport, type AgentOptions } from './agentShared.ts';
 import type { System } from './types.ts';
 
 export function tracetoonCommand(env: Record<string, string | undefined> = process.env): string[] {
@@ -74,20 +74,10 @@ export function tracetoonSystem(options: Partial<AgentOptions> = {}): System {
       const run = await runClaude(sandbox, {
         prompt: PR_PROMPT,
         model: o.model,
-        allowedTools: [
-          'Read',
-          'Glob',
-          'Grep',
-          'Write',
-          'Edit',
-          'Agent',
-          'Task',
-          'Bash(git:*)',
-          'Bash(gh:*)',
-          'Bash(tracetoon:*)',
-          `Bash(${launcher.replace(/\\/g, '/')}:*)`,
-          `Bash(${launcher}:*)`,
-        ],
+        // The shared list plus the launcher's absolute path, and read access to
+        // the skill folder, which lies outside the working directory.
+        allowedTools: [...AGENT_TOOLS, `Bash(${launcher.replace(/\\/g, '/')}:*)`, `Bash(${launcher}:*)`],
+        addDirs: [tt.skill],
         maxBudgetUsd: o.maxBudgetUsd,
         timeoutMs: o.timeoutMs,
         env: tt.env,

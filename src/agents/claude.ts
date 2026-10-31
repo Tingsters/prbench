@@ -39,6 +39,8 @@ export interface ClaudeRunOptions {
   model: string;
   /** Tool rules Claude Code may use without asking; everything else is denied. */
   allowedTools: string[];
+  /** Directories outside the checkout the agent may read and use. */
+  addDirs?: string[];
   maxBudgetUsd?: number;
   timeoutMs?: number;
   /** Added to the sandbox environment. */
@@ -99,6 +101,7 @@ export async function runClaude(sandbox: Sandbox, opts: ClaudeRunOptions): Promi
     '--allowedTools',
     opts.allowedTools.join(','),
   ];
+  for (const dir of opts.addDirs ?? []) cmd.push('--add-dir', dir);
   if (opts.maxBudgetUsd !== undefined) cmd.push('--max-budget-usd', String(opts.maxBudgetUsd));
   opts.log?.(`claude ${cmd.slice(claudeCommand().length).join(' ')}`);
 

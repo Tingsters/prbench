@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkArtifact, type PRArtifact } from '../src/schema/artifact.ts';
@@ -7,7 +7,9 @@ import { runCase } from '../src/run/runner.ts';
 import { original } from '../src/systems/original.ts';
 import type { System } from '../src/systems/types.ts';
 import { exec } from '../src/util/exec.ts';
-import { copyExample, EXAMPLE, ROOT, tempDir } from './helpers.ts';
+import { cleanupTemps, copyExample, EXAMPLE, ROOT, tempDir } from './helpers.ts';
+
+afterAll(cleanupTemps);
 
 describe('runCase', () => {
   const loaded = loadCase(EXAMPLE);

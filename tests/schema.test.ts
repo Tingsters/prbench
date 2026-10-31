@@ -1,7 +1,9 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { ARTIFACT_SCHEMA, checkArtifact } from '../src/schema/artifact.ts';
 import { CaseError, caseDirs, checkCase, checkFacts, FACTS_SCHEMA, loadCase } from '../src/schema/case.ts';
-import { CASES, copyExample, EXAMPLE, exampleCaseJson } from './helpers.ts';
+import { CASES, cleanupTemps, copyExample, EXAMPLE, exampleCaseJson } from './helpers.ts';
+
+afterAll(cleanupTemps);
 
 describe('cases', () => {
   test('the example case is valid', () => {

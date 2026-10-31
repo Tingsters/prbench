@@ -1,16 +1,20 @@
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll } from 'bun:test';
 
 export const ROOT = resolve(import.meta.dir, '..');
 export const CASES = join(ROOT, 'cases');
 export const EXAMPLE = join(CASES, 'example-greet-default');
 
 const temps: string[] = [];
-afterAll(() => {
-  for (const t of temps) rmSync(t, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-});
+/**
+ * Removes every temp dir made so far. A hook registered here would attach to
+ * only one test file when several run together, so each test file registers
+ * `afterAll(cleanupTemps)` itself.
+ */
+export function cleanupTemps(): void {
+  for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
 
 export function tempDir(prefix = 'prbench-test-'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
