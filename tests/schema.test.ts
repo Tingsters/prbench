@@ -42,6 +42,14 @@ describe('cases', () => {
     expect(checkCase(c, EXAMPLE)).toEqual([]);
   });
 
+  test('a case can be kept but excluded, with a reason', () => {
+    const c = exampleCaseJson();
+    c.excluded = 'the repository forbids pull requests';
+    expect(checkCase(c, EXAMPLE)).toEqual([]);
+    c.excluded = '';
+    expect(checkCase(c, EXAMPLE)).toEqual(['excluded: expected a non-empty string']);
+  });
+
   test('loadCase lists every problem and checks the id matches the directory', () => {
     const { dir } = copyExample('renamed', (c) => (c.id = 'other-name'));
     expect(() => loadCase(dir)).toThrow(/must match the directory name "renamed"/);

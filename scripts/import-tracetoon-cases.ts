@@ -41,7 +41,16 @@ const CASES = [
   { id: 'pr11', name: 'Installer picks newest release', repo: 'tracetoon', base: '76fca1565a', head: 'd5935ebcd4', pr: 11 },
   { id: 'pr12', name: 'Quote-aware command splitting', repo: 'tracetoon', base: '0f850d80d5', head: '1b46c4c72f', pr: 12 },
   { id: 'pr10', name: 'Comic pages', repo: 'tracetoon', base: 'cfd0e3d26c', head: '85b4567087', pr: 10, heldOut: true },
-  { id: 'showtail', name: 'Showtail library extraction', repo: 'Showtail', base: 'ce5b776', head: 'e74fd9a', heldOut: true },
+  {
+    id: 'showtail',
+    name: 'Showtail library extraction',
+    repo: 'Showtail',
+    base: 'ce5b776',
+    head: 'e74fd9a',
+    heldOut: true,
+    // Found on the first run: the baseline agent declined, rightly.
+    excluded: "Showtail's CLAUDE.md forbids pull requests; work lands directly on main, so there is no PR to write.",
+  },
   { id: 'vexaim', name: 'vexaim-cli Codex work', repo: 'vexaim-cli', base: '0723dbf^', head: '0723dbf', heldOut: true },
 ] as const;
 
@@ -141,6 +150,7 @@ for (const c of CASES) {
         source: `Tracetoon description eval (scripts/eval-descriptions.ts, case ${c.id})`,
         notes: `Sessions cut to ${new Date(from).toISOString()} – ${new Date(to).toISOString()}. Real session logs: keep local.`,
       },
+      ...('excluded' in c ? { excluded: c.excluded } : {}),
     };
     writeFileSync(join(dir, 'case.json'), JSON.stringify(kase, null, 2) + '\n');
     const size = sessions.reduce((n, s) => n + readFileSync(join(dir, s.file)).length, 0);

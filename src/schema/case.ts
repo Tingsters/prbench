@@ -72,6 +72,11 @@ export interface Case {
   original?: CaseOriginal;
   /** Where the case came from and whether it is synthetic. */
   provenance: { source: string; synthetic?: boolean; license?: string; notes?: string };
+  /**
+   * Why the case is kept but not run, e.g. the repository forbids pull
+   * requests. Commands skip excluded cases and say why.
+   */
+  excluded?: string;
 }
 
 /**
@@ -156,6 +161,7 @@ export function checkCase(value: unknown, dir?: string): Problems {
     c.string(o.url, 'original.url', { optional: true });
   }
 
+  c.string(v.excluded, 'excluded', { optional: true });
   if (c.object(v.provenance, 'provenance')) {
     const p = v.provenance as Record<string, unknown>;
     c.string(p.source, 'provenance.source');

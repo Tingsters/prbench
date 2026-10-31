@@ -69,7 +69,9 @@ program
   .argument('[cases]', 'cases directory', 'cases')
   .action((root: string) => {
     const { loaded, errors } = loadAll(resolve(root));
-    for (const l of loaded) console.log(`ok    ${l.case.id} (${l.case.mode}, ${l.case.split})`);
+    for (const l of loaded) {
+      console.log(`ok    ${l.case.id} (${l.case.mode}, ${l.case.split})${l.case.excluded ? ` excluded: ${l.case.excluded}` : ''}`);
+    }
     for (const e of errors) console.log(`FAIL  ${e.message}`);
     if (loaded.length + errors.length === 0) {
       console.log(`no cases found under ${root}`);
@@ -121,6 +123,10 @@ program
       }
       let failures = 0;
       for (const l of picked) {
+        if (l.case.excluded) {
+          console.log(`skip  ${l.case.id}: excluded (${l.case.excluded})`);
+          continue;
+        }
         const support = system.supports(l);
         if (!support.supported) {
           console.log(`skip  ${l.case.id}: ${support.reason}`);
@@ -167,6 +173,10 @@ program
       const tasks: (() => Promise<PairResult>)[] = [];
       for (const l of loaded) {
         if (wanted && !wanted.includes(l.case.id)) continue;
+        if (l.case.excluded) {
+          console.log(`skip  ${l.case.id}: excluded (${l.case.excluded})`);
+          continue;
+        }
         const facts = loadFacts(l);
         if (!facts) {
           console.log(`skip  ${l.case.id}: no fact sheet`);
