@@ -97,6 +97,7 @@ program
   .option('-o, --out <dir>', 'output directory', 'results/artifacts')
   .option('--model <model>', 'model for agent systems', DEFAULT_AGENT_OPTIONS.model)
   .option('--max-budget-usd <n>', 'spending cap per agent run, or "none"', String(DEFAULT_AGENT_OPTIONS.maxBudgetUsd ?? 'none'))
+  .option('--timeout-min <n>', 'time limit per agent run, in minutes', String(DEFAULT_AGENT_OPTIONS.timeoutMs / 60_000))
   .option('--skip-existing', 'skip cases that already have an artifact for this system')
   .option('--keep-sandbox', 'leave sandboxes on disk for inspection')
   .action(
@@ -108,10 +109,15 @@ program
       out: string;
       model: string;
       maxBudgetUsd: string;
+      timeoutMin: string;
       skipExisting?: boolean;
       keepSandbox?: boolean;
     }) => {
-      const system = findSystem(opts.system, { model: opts.model, maxBudgetUsd: parseBudget(opts.maxBudgetUsd) });
+      const system = findSystem(opts.system, {
+        model: opts.model,
+        maxBudgetUsd: parseBudget(opts.maxBudgetUsd),
+        timeoutMs: Number(opts.timeoutMin) * 60_000,
+      });
       const { loaded, errors } = loadAll(resolve(opts.cases));
       const wanted = opts.case ? list(opts.case) : undefined;
       let picked = wanted ? loaded.filter((l) => wanted.includes(l.case.id)) : loaded;

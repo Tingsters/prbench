@@ -52,7 +52,7 @@ export function parseBudget(value: string): number | undefined {
 export const DEFAULT_AGENT_OPTIONS: AgentOptions = {
   model: process.env.PRBENCH_MODEL ?? 'opus',
   maxBudgetUsd: parseBudget(process.env.PRBENCH_MAX_BUDGET_USD ?? '25'),
-  timeoutMs: Number(process.env.PRBENCH_TIMEOUT_MS ?? 45 * 60_000),
+  timeoutMs: Number(process.env.PRBENCH_TIMEOUT_MS ?? 120 * 60_000),
 };
 
 export function replaySupport(loaded: LoadedCase): { supported: true } | { supported: false; reason: string } {
