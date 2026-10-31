@@ -73,7 +73,7 @@ describe('agent systems', () => {
     expect(call.home).toContain('prbench-example-greet-default-');
     expect(call.args).toEqual(expect.arrayContaining(['-p', '--model', 'sonnet', '--permission-mode', 'acceptEdits']));
     expect(call.args[call.args.indexOf('--allowedTools') + 1]).toBe(AGENT_TOOLS.join(','));
-    expect(call.args).not.toContain('--add-dir');
+    expect(call.args.filter((a: string, i: number) => call.args[i - 1] === '--add-dir')).toEqual([join(call.cwd, '..', '..', 'git')]);
     expect(call.args[call.args.indexOf('--disallowedTools') + 1]).toBe('PowerShell');
 
     expect(artifact.system).toBe('claude-native');
@@ -105,7 +105,10 @@ describe('agent systems', () => {
     expect(tools.startsWith(AGENT_TOOLS.join(','))).toBe(true); // same base list as the baseline
     expect(call.args[call.args.indexOf('--disallowedTools') + 1]).toBe('PowerShell');
     expect(tools).toContain('/home/.claude/skills/tracetoon/bin/tracetoon:*)');
-    expect(call.args[call.args.indexOf('--add-dir') + 1]).toBe(join(sandboxRoot!, 'home', '.claude', 'skills', 'tracetoon'));
+    expect(call.args.filter((a: string, i: number) => call.args[i - 1] === '--add-dir')).toEqual([
+      join(sandboxRoot!, 'git'),
+      join(sandboxRoot!, 'home', '.claude', 'skills', 'tracetoon'),
+    ]);
 
     expect(artifact.title).toBe("Greet 'world' when no name is given");
     expect(artifact.body).toContain('greet() now falls back to world.');

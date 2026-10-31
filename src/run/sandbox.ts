@@ -2,6 +2,7 @@
 //
 //   <root>/work/<name>  the case's repository, checked out on a work branch
 //                       (<name> is the recorded repository's directory name)
+//   <root>/git          its git directory (the checkout's .git is a pointer)
 //   <root>/remote.git   a bare repo that receives every push
 //   <root>/home         HOME / USERPROFILE, holding only the case's sessions
 //   <root>/codex        CODEX_HOME
@@ -43,6 +44,13 @@ export interface GhCall {
 export interface Sandbox {
   root: string;
   repo: string;
+  /**
+   * The checkout's git directory, kept outside the checkout (<root>/git, with
+   * a .git pointer file in the checkout). Claude Code treats paths under
+   * `.git/` as sensitive and won't let an unattended agent write there, but
+   * tools like Tracetoon keep their working files in the git directory.
+   */
+  gitDir: string;
   remote: string;
   home: string;
   codexHome: string;
@@ -205,6 +213,7 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
   const rec = recordedPath(c);
   const repo = join(root, 'work', rec ? basename(rec.replace(/[\\/]+$/, '')) || 'repo' : 'repo');
   const remote = join(root, 'remote.git');
+  const gitDir = join(root, 'git');
   const home = join(root, 'home');
   const codexHome = join(root, 'codex');
   const bin = join(root, 'bin');
@@ -219,7 +228,7 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
 
     // Fetch every ref, not just branches and tags as a clone would: a case's
     // bundle may keep its commits under any ref.
-    git(['init', '--quiet', '--initial-branch', 'prbench-empty', repo]);
+    git(['init', '--quiet', '--initial-branch', 'prbench-empty', '--separate-git-dir', gitDir, repo]);
     git(['config', 'user.name', 'prbench'], repo);
     git(['config', 'user.email', 'prbench@example.invalid'], repo);
     git(['config', 'core.autocrlf', 'false'], repo);
@@ -258,6 +267,7 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
     return {
       root,
       repo,
+      gitDir,
       remote,
       home,
       codexHome,

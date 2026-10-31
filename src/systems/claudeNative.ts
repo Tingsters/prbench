@@ -28,6 +28,7 @@ export function claudeNative(options: Partial<AgentOptions> = {}): System {
         model: o.model,
         allowedTools: AGENT_TOOLS,
         disallowedTools: DISALLOWED_TOOLS,
+        addDirs: [sandbox.gitDir],
         maxBudgetUsd: o.maxBudgetUsd,
         timeoutMs: o.timeoutMs,
         env: { TRACETOON: '0' },

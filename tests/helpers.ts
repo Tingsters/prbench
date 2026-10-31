@@ -1,6 +1,11 @@
+import { setDefaultTimeout } from 'bun:test';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+
+// Sandbox tests run git several times and can pass 5s on a busy machine.
+// bunfig.toml sets the same; this covers runs that don't pick it up.
+setDefaultTimeout(30_000);
 
 export const ROOT = resolve(import.meta.dir, '..');
 export const CASES = join(ROOT, 'cases');

@@ -41,9 +41,9 @@ export function installTracetoon(sandbox: Sandbox): { env: Record<string, string
   return { env, version, skill };
 }
 
-/** The PR text in Tracetoon's newest run folder, if it got that far. */
-export function tracetoonDraft(repo: string): { title: string; body: string; rendered: boolean; run: string } | undefined {
-  const runs = join(repo, '.git', 'tracetoon', 'runs');
+/** The PR text in Tracetoon's newest run folder (under the git directory), if it got that far. */
+export function tracetoonDraft(gitDir: string): { title: string; body: string; rendered: boolean; run: string } | undefined {
+  const runs = join(gitDir, 'tracetoon', 'runs');
   const latest = join(runs, 'latest');
   if (!existsSync(latest)) return undefined;
   const run = readFileSync(latest, 'utf8').trim();
@@ -74,10 +74,10 @@ export function tracetoonSystem(options: Partial<AgentOptions> = {}): System {
       const run = await runClaude(sandbox, {
         prompt: PR_PROMPT,
         model: o.model,
-        // The shared list plus the launcher's absolute path, and read access to
-        // the skill folder, which lies outside the working directory.
+        // The shared list plus the launcher's absolute path, and access to the
+        // skill folder, which lies outside the working directory.
         allowedTools: [...AGENT_TOOLS, `Bash(${launcher.replace(/\\/g, '/')}:*)`, `Bash(${launcher}:*)`],
-        addDirs: [tt.skill],
+        addDirs: [sandbox.gitDir, tt.skill],
         disallowedTools: DISALLOWED_TOOLS,
         maxBudgetUsd: o.maxBudgetUsd,
         timeoutMs: o.timeoutMs,
@@ -88,7 +88,7 @@ export function tracetoonSystem(options: Partial<AgentOptions> = {}): System {
       const notes: string[] = [];
       if (run.isError) notes.push(`agent reported an error: ${describeRun(run)}`);
       const published = sandbox.capturedPRs().at(-1);
-      const draft = tracetoonDraft(sandbox.repo);
+      const draft = tracetoonDraft(sandbox.gitDir);
       let title: string;
       let body: string;
       if (published?.title) {

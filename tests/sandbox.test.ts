@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadCase } from '../src/schema/case.ts';
 import { claudeProjectDir, createSandbox, pathPairs, rewritePaths } from '../src/run/sandbox.ts';
@@ -99,6 +99,13 @@ describe('createSandbox', () => {
         'refs/remotes/origin/HEAD',
         'refs/remotes/origin/main',
       ]);
+      // The git directory lives outside the checkout, so agents may write
+      // there (Claude Code guards paths under .git/).
+      expect(sb.gitDir).toBe(join(sb.root, 'git'));
+      expect(git(['rev-parse', '--absolute-git-dir'], sb.repo).replace(/\//g, '\\').toLowerCase()).toBe(
+        sb.gitDir.replace(/\//g, '\\').toLowerCase(),
+      );
+      expect(statSync(join(sb.repo, '.git')).isFile()).toBe(true);
     } finally {
       sb.dispose();
     }

@@ -44,7 +44,8 @@ if (mode === 'native') {
   sh(['gh', 'pr', 'create', '--title', 'Fallback to world', '--body', 'Greets world when no name is given.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)']);
 }
 if (mode === 'tracetoon') {
-  const runs = join(process.cwd(), '.git', 'tracetoon', 'runs');
+  const gitDir = Bun.spawnSync(['git', 'rev-parse', '--absolute-git-dir']).stdout.toString().trim();
+  const runs = join(gitDir, 'tracetoon', 'runs');
   const run = '20260101-000000';
   mkdirSync(join(runs, run), { recursive: true });
   writeFileSync(join(runs, run, 'title.txt'), "Greet 'world' when no name is given\n");
