@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Sandbox } from '../run/sandbox.ts';
+import type { AgentRunResult } from './types.ts';
 
 export const TOKEN_FILE = join(homedir(), '.prbench', 'claude-oauth-token');
 
@@ -50,19 +51,7 @@ export interface ClaudeRunOptions {
   log?: (message: string) => void;
 }
 
-export interface ClaudeRunResult {
-  exitCode: number;
-  timedOut: boolean;
-  /** The final message, when Claude Code reported one. */
-  result?: string;
-  isError: boolean;
-  costUsd?: number;
-  inputTokens?: number;
-  outputTokens?: number;
-  numTurns?: number;
-  durationMs: number;
-  stderr: string;
-}
+export type ClaudeRunResult = AgentRunResult;
 
 function parseResult(stdout: string): Partial<ClaudeRunResult> {
   // --output-format json prints one JSON object; take the last line that parses.
@@ -135,7 +124,7 @@ export async function runClaude(sandbox: Sandbox, opts: ClaudeRunOptions): Promi
 }
 
 /** A short explanation of a run that didn't produce a PR, for error messages. */
-export function describeRun(r: ClaudeRunResult): string {
+export function describeRun(r: AgentRunResult): string {
   const parts = [`exit ${r.exitCode}`];
   if (r.timedOut) parts.push('timed out');
   if (r.isError) parts.push('reported an error');

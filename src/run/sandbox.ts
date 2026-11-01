@@ -16,7 +16,8 @@
 // account through these paths. (A determined process could still use
 // absolute paths; the sandbox isolates discovery, it is not a security
 // boundary.)
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import type { Case, CaseSession, LoadedCase } from '../schema/case.ts';
@@ -168,6 +169,23 @@ function writeGhShims(bin: string): void {
     mode: 0o755,
   });
   writeFileSync(join(bin, 'gh.cmd'), `@"${bun}" "${FAKE_GH}" %*\r\n`);
+  if (process.platform === 'win32') {
+    // Bun.which() resolves native executables before .cmd wrappers. A real
+    // gh.exe here also covers tools that resolve gh before invoking it.
+    const hash = createHash('sha256').update(readFileSync(FAKE_GH)).digest('hex').slice(0, 16);
+    const cache = resolve(import.meta.dir, '../../node_modules/.cache/prbench-gh', `${Bun.version}-${process.arch}-${hash}`);
+    mkdirSync(cache, { recursive: true });
+    const executable = join(cache, 'gh.exe');
+    if (!existsSync(executable)) {
+      const temporary = join(cache, `gh-${process.pid}.exe`);
+      const build = Bun.spawnSync([bun, 'build', '--compile', '--outfile', temporary, FAKE_GH], { stdout: 'pipe', stderr: 'pipe' });
+      if (build.exitCode !== 0) throw new Error(`Could not build the Windows fake gh: ${build.stderr.toString().slice(-500)}`);
+      try { renameSync(temporary, executable); }
+      catch (err) { if (!existsSync(executable)) throw err; }
+      finally { if (existsSync(temporary)) unlinkSync(temporary); }
+    }
+    copyFileSync(executable, join(bin, 'gh.exe'));
+  }
 }
 
 const DROPPED_ENV = [

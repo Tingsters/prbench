@@ -99,7 +99,7 @@ describe('cli', () => {
   });
 
   test('run explains unknown systems and cases', () => {
-    expect(cli('run', '-s', 'nope').stderr).toContain('unknown system "nope" (known: original, claude-native, tracetoon)');
+    expect(cli('run', '-s', 'nope').stderr).toContain('unknown system "nope" (known: original, claude-native, tracetoon, codex-native, codex-tracetoon)');
     expect(cli('run', '-s', 'original', '-c', 'missing').stderr).toContain('no case "missing"');
   });
 });

@@ -8,6 +8,8 @@ if (args[0] === 'hook' && args[1] === 'install') {
   const home = process.env.HOME!;
   mkdirSync(join(home, '.claude'), { recursive: true });
   writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [] } }));
+  mkdirSync(process.env.CODEX_HOME!, { recursive: true });
+  writeFileSync(join(process.env.CODEX_HOME!, 'hooks.json'), JSON.stringify({ hooks: { PreToolUse: [] } }));
   process.exit(0);
 }
 process.stderr.write(`fake tracetoon: unsupported ${args.join(' ')}\n`);
