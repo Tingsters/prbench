@@ -119,6 +119,7 @@ test('prose AI-review disclosures cannot reveal the system to a blind judge', ()
   for (const disclosure of [
     'Description prepared from session logs with Tracetoon and independently reviewed by AI agents. No human review was captured.',
     'This description was prepared with AI from session logs and independently reviewed by an AI agent.\nNo human author review was captured.',
+    'Implementation assisted by Claude Code. Description drafted from session logs with Tracetoon.',
   ]) expect(normalizeBody(`${content}\n\n${disclosure}`)).toBe(content);
 });
 
