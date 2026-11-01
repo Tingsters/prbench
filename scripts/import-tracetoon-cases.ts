@@ -6,9 +6,12 @@
 //   repo.bundle    the repository up to the case's head commit
 //   session-*.jsonl  the agent sessions Tracetoon matched to the change, cut to
 //                  the case's time window: from an hour before the base commit
-//                  to two minutes after the head commit. Cutting at the head
-//                  commit keeps the PR text the agent wrote afterwards out of
-//                  the logs, so no system can copy it.
+//                  to ten seconds after the head commit. Records that write PR
+//                  text (Tracetoon run folders, `gh pr create/edit`) are
+//                  dropped wherever they fall. Both keep the PR text the agent
+//                  wrote, this one or an earlier one, out of the logs, so no
+//                  system can copy it. The import fails if the published
+//                  title or body still appears in a slice.
 //   facts.json     Tracetoon's hand-checked fact sheet
 //   original.md    the PR that was published, when there is one
 //
@@ -60,6 +63,24 @@ const { scan } = (await import(join(tracetoon, 'src', 'pipeline.ts'))) as {
   };
 };
 
+/** Records that write or publish PR text: Tracetoon run folders, or gh pr create/edit. */
+const WRITES_PR_TEXT = /tracetoon(?:\\\\|\/)+runs(?:\\\\|\/)|\bgh\s+pr\s+(?:create|edit)\b/;
+
+/** Fails when the published PR's title or opening line appears in a slice. */
+function assertNoLeak(sliceText: string, title: string, body: string): void {
+  const esc = (s: string) => JSON.stringify(s).slice(1, -1);
+  const opening = body
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .split('\n')
+    .map((l) => l.replace(/^[#>*\-\s]+/, '').trim())
+    .find((l) => l.length >= 40);
+  for (const needle of [title, opening?.slice(0, 80)].filter((s): s is string => Boolean(s))) {
+    if (sliceText.includes(esc(needle)) || sliceText.includes(needle)) {
+      throw new Error(`the published PR leaks into the session slice: "${needle.slice(0, 60)}"`);
+    }
+  }
+}
+
 /** Largest first record a slice may start with (well under readers' 128 KB head window). */
 const HEAD_LIMIT = 64 * 1024;
 
@@ -80,6 +101,8 @@ function slice(text: string, from: number, to: number): { text: string; kept: nu
     const isMeta = j.type === 'session_meta';
     const t = Date.parse(j.timestamp ?? '');
     if (!isMeta && !(t >= from && t <= to)) continue;
+    // PR text written for this or any other PR is the answer key; drop it.
+    if (WRITES_PR_TEXT.test(line)) continue;
     // Readers find a session's working directory in the first records of the
     // file, reading only its first 128 KB (Showtail's agent-traces). A slice
     // that starts mid-session can open with one huge record, which hides the
@@ -111,7 +134,7 @@ for (const c of CASES) {
     }
 
     const from = commitTime(repo, base) - 60 * 60_000;
-    const to = commitTime(repo, head) + 2 * 60_000;
+    const to = commitTime(repo, head) + 10_000;
     const matches = scan(repo, { base, head, noGh: true }).matches.filter((m) => m.band === 'included');
     const sessions: CaseSession[] = [];
     for (const [i, m] of matches.entries()) {
@@ -141,6 +164,7 @@ for (const c of CASES) {
       const pr = JSON.parse(r.stdout) as { title: string; body: string; url: string };
       writeFileSync(join(dir, 'original.md'), pr.body.replace(/\r\n/g, '\n'));
       original = { title: pr.title, body: 'original.md', url: pr.url };
+      for (const s of sessions) assertNoLeak(readFileSync(join(dir, s.file), 'utf8'), pr.title, pr.body);
     }
 
     const kase: Case = {
