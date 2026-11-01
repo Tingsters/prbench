@@ -1,0 +1,127 @@
+// Judges run through the agent CLIs the user is already signed in to, with
+// tools off, hooks off and no saved session, from an empty temp directory, so
+// a judging call can't touch the user's repositories or show up as work in
+// their session logs.
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { JUDGMENT_SCHEMA } from './rubric.ts';
+import { codexCommand, codexRunEnv, withCodexAuth } from '../agents/codexAuth.ts';
+import { codexTerminalEvent, reasoningEffort, type ReasoningEffort } from '../agents/codex.ts';
+import { runAgentProcess } from '../agents/process.ts';
+
+export interface JudgeReply {
+  text: string;
+  costUsd?: number;
+}
+
+export interface JudgeProvider {
+  /** Stable id used in file names and reports, e.g. "claude:opus". */
+  id: string;
+  family: string;
+  ask(prompt: string): Promise<JudgeReply>;
+}
+
+async function run(cmd: string[], prompt: string, cwd: string, timeoutMs: number, env?: Record<string, string | undefined>): Promise<{ code: number; stdout: string; stderr: string }> {
+  const proc = Bun.spawn(cmd, { cwd, env, stdin: new Blob([prompt]), stdout: 'pipe', stderr: 'pipe' });
+  const timer = setTimeout(() => proc.kill(), timeoutMs);
+  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+  const code = await proc.exited;
+  clearTimeout(timer);
+  return { code, stdout, stderr };
+}
+
+function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), 'prbench-judge-'));
+  return fn(dir).finally(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+}
+
+export function claudeJudge(model = 'opus', timeoutMs = 15 * 60_000): JudgeProvider {
+  return {
+    id: `claude:${model}`,
+    family: 'anthropic',
+    ask: (prompt) =>
+      withTempDir(async (dir) => {
+        const r = await run(
+          [
+            'claude',
+            '-p',
+            '--tools',
+            '',
+            '--model',
+            model,
+            '--output-format',
+            'json',
+            '--json-schema',
+            JSON.stringify(JUDGMENT_SCHEMA),
+            '--no-session-persistence',
+            '--settings',
+            '{"disableAllHooks":true}',
+          ],
+          prompt,
+          dir,
+          timeoutMs,
+        );
+        if (r.code !== 0) throw new Error(`claude judge failed (${r.code}): ${(r.stderr || r.stdout).slice(-800)}`);
+        const out = JSON.parse(r.stdout.trim().split('\n').at(-1)!) as Record<string, any>;
+        if (out.is_error) throw new Error(`claude judge reported an error: ${String(out.result).slice(0, 800)}`);
+        const text = out.structured_output !== undefined ? JSON.stringify(out.structured_output) : String(out.result ?? '');
+        return { text, costUsd: typeof out.total_cost_usd === 'number' ? out.total_cost_usd : undefined };
+      }),
+  };
+}
+
+export function codexJudge(model?: string, timeoutMs = 15 * 60_000, effort?: ReasoningEffort): JudgeProvider {
+  return {
+    id: `codex:${model ?? 'default'}${effort ? `@${effort}` : ''}`,
+    family: 'openai',
+    ask: (prompt) =>
+      withTempDir(async (dir) => {
+        const schema = join(dir, 'schema.json');
+        const out = join(dir, 'out.json');
+        writeFileSync(schema, JSON.stringify(JUDGMENT_SCHEMA));
+        const cmd = [...codexCommand(), 'exec', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '--output-schema', schema, '-o', out];
+        if (model) cmd.push('-m', model);
+        if (effort) cmd.push('--json', '--ignore-user-config', '--disable', 'hooks', '--disable', 'memories', '--disable', 'multi_agent', '--disable', 'apps', '-c', 'apps._default.enabled=false', '--disable', 'browser_use', '--disable', 'computer_use', '--disable', 'shell_tool', '--disable', 'view_image', '--disable', 'plugins', '--disable', 'image_generation', '-c', `model_reasoning_effort="${effort}"`, '-c', 'cli_auth_credentials_store="file"', '-c', 'web_search="disabled"');
+        cmd.push('-');
+        const ask = async (env?: Record<string, string | undefined>) => {
+          const r = await runAgentProcess(cmd, { prompt, cwd: dir, timeoutMs, env, terminalEvent: effort ? codexTerminalEvent : undefined });
+          if (r.exitCode !== 0) throw new Error(`codex judge failed (${r.exitCode}): ${(r.stderr || r.stdout).slice(-800)}`);
+          return { text: readFileSync(out, 'utf8') };
+        };
+        if (!effort) return ask(); // Preserve the legacy codex[:model] judge contract/cache.
+        const home = join(dir, 'home');
+        const codexHome = join(dir, 'codex');
+        mkdirSync(home, { recursive: true });
+        return withCodexAuth(codexHome, () => ask(codexRunEnv({ ...process.env, CODEX_HOME: codexHome, HOME: home, USERPROFILE: home,
+          APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local'),
+          XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share'),
+        })));
+      }),
+  };
+}
+
+/** "claude", "claude:sonnet", "codex", "codex:gpt-5.5" -> a provider. */
+export function parseJudge(spec: string): JudgeProvider {
+  const [provider, effort, ...extra] = spec.split('@');
+  const [name, model, ...modelExtra] = provider!.split(':');
+  if (extra.length || modelExtra.length || (effort !== undefined && (!effort || name !== 'codex' || !model))) throw new Error(`invalid judge "${spec}"; use codex:model@effort`);
+  if (name === 'claude') return claudeJudge(model || 'opus');
+  if (name === 'codex') return codexJudge(model || undefined, undefined, effort ? reasoningEffort(effort) : undefined);
+  throw new Error(`unknown judge "${spec}" (use claude[:model] or codex[:model])`);
+}
+
+/** Pulls the first JSON object out of a reply that may wrap it in prose or a code fence. */
+export function extractJson(text: string): unknown {
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const fence = /```(?:json)?\s*([\s\S]*?)```/.exec(trimmed);
+    if (fence) return JSON.parse(fence[1]!);
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
+    throw new Error(`no JSON in judge reply: ${trimmed.slice(0, 200)}`);
+  }
+}

@@ -1,7 +1,9 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { ARTIFACT_SCHEMA, checkArtifact } from '../src/schema/artifact.ts';
 import { CaseError, caseDirs, checkCase, checkFacts, FACTS_SCHEMA, loadCase } from '../src/schema/case.ts';
-import { CASES, copyExample, EXAMPLE, exampleCaseJson } from './helpers.ts';
+import { CASES, cleanupTemps, copyExample, EXAMPLE, exampleCaseJson } from './helpers.ts';
+
+afterAll(cleanupTemps);
 
 describe('cases', () => {
   test('the example case is valid', () => {
@@ -38,6 +40,14 @@ describe('cases', () => {
     delete c.sessions;
     delete c.original;
     expect(checkCase(c, EXAMPLE)).toEqual([]);
+  });
+
+  test('a case can be kept but excluded, with a reason', () => {
+    const c = exampleCaseJson();
+    c.excluded = 'the repository forbids pull requests';
+    expect(checkCase(c, EXAMPLE)).toEqual([]);
+    c.excluded = '';
+    expect(checkCase(c, EXAMPLE)).toEqual(['excluded: expected a non-empty string']);
   });
 
   test('loadCase lists every problem and checks the id matches the directory', () => {

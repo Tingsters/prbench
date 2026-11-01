@@ -28,6 +28,14 @@ export interface CaseRepo {
   head?: string;
   /** Branch name the work is checked out on in the sandbox. Defaults to "prbench/<case id>". */
   branch?: string;
+  /**
+   * Where the repository was checked out when the sessions were recorded, as
+   * the logs spell it. Sandboxes rewrite it, and its parent directory, to the
+   * sandbox checkout and its parent. Defaults to the first session's cwd.
+   */
+  recordedPath?: string;
+  /** When the base commit was made (ISO). Judges read session evidence from this point on. */
+  baseTime?: string;
 }
 
 export interface CaseSession {
@@ -35,9 +43,9 @@ export interface CaseSession {
   /** JSONL transcript, relative to the case directory. */
   file: string;
   /**
-   * The working directory the session was recorded in. Sandboxes rewrite it to
-   * the sandbox checkout so tools that match sessions to repositories by path
-   * still find them.
+   * The working directory the session was recorded in: the repository or its
+   * parent directory. Sandboxes rewrite it (see CaseRepo.recordedPath) so
+   * tools that match sessions to repositories by path still find them.
    */
   cwd: string;
 }
@@ -66,6 +74,11 @@ export interface Case {
   original?: CaseOriginal;
   /** Where the case came from and whether it is synthetic. */
   provenance: { source: string; synthetic?: boolean; license?: string; notes?: string };
+  /**
+   * Why the case is kept but not run, e.g. the repository forbids pull
+   * requests. Commands skip excluded cases and say why.
+   */
+  excluded?: string;
 }
 
 /**
@@ -116,6 +129,10 @@ export function checkCase(value: unknown, dir?: string): Problems {
     c.string(r.url, 'repo.url', { optional: true });
     c.string(r.base, 'repo.base', { pattern: SHA });
     c.string(r.head, 'repo.head', { optional: mode !== 'replay', pattern: SHA });
+    c.string(r.recordedPath, 'repo.recordedPath', { optional: true });
+    if (c.string(r.baseTime, 'repo.baseTime', { optional: true }) && r.baseTime !== undefined && Number.isNaN(Date.parse(r.baseTime as string))) {
+      c.fail('repo.baseTime', 'expected an ISO timestamp');
+    }
     if (c.string(r.branch, 'repo.branch', { optional: true }) && r.branch === 'main') {
       c.fail('repo.branch', 'must not be "main": the sandbox keeps main at the base commit');
     }
@@ -149,6 +166,7 @@ export function checkCase(value: unknown, dir?: string): Problems {
     c.string(o.url, 'original.url', { optional: true });
   }
 
+  c.string(v.excluded, 'excluded', { optional: true });
   if (c.object(v.provenance, 'provenance')) {
     const p = v.provenance as Record<string, unknown>;
     c.string(p.source, 'provenance.source');

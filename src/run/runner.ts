@@ -20,6 +20,12 @@ export interface RunResult {
   sandboxRoot?: string;
 }
 
+/** The case as systems see it: without the fact sheet, which is the judges' answer key. */
+export function withoutFacts(loaded: LoadedCase): LoadedCase {
+  const { facts: _facts, ...rest } = loaded.case;
+  return { dir: loaded.dir, case: rest };
+}
+
 /** Runs one system on one case in a fresh sandbox and checks the artifact it returns. */
 export async function runCase(loaded: LoadedCase, system: System, opts: RunOptions = {}): Promise<RunResult> {
   const support = system.supports(loaded);
@@ -28,7 +34,7 @@ export async function runCase(loaded: LoadedCase, system: System, opts: RunOptio
   const sandbox = createSandbox(loaded, { parent: opts.sandboxParent });
   try {
     log(`${loaded.case.id} / ${system.id}: sandbox at ${sandbox.root}`);
-    const artifact = await system.run({ loaded, sandbox, log });
+    const artifact = await system.run({ loaded: withoutFacts(loaded), sandbox, log });
     const problems = checkArtifact(artifact);
     if (problems.length) throw new Error(`${system.id} returned an invalid artifact:\n  ${problems.join('\n  ')}`);
     if (artifact.case !== loaded.case.id || artifact.system !== system.id) {

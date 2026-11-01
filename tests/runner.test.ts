@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkArtifact, type PRArtifact } from '../src/schema/artifact.ts';
@@ -7,7 +7,9 @@ import { runCase } from '../src/run/runner.ts';
 import { original } from '../src/systems/original.ts';
 import type { System } from '../src/systems/types.ts';
 import { exec } from '../src/util/exec.ts';
-import { copyExample, EXAMPLE, ROOT, tempDir } from './helpers.ts';
+import { cleanupTemps, copyExample, EXAMPLE, ROOT, tempDir } from './helpers.ts';
+
+afterAll(cleanupTemps);
 
 describe('runCase', () => {
   const loaded = loadCase(EXAMPLE);
@@ -26,6 +28,24 @@ describe('runCase', () => {
     expect(artifact.diff).toContain('+++ b/greet.test.js');
     expect(JSON.parse(readFileSync(path!, 'utf8'))).toEqual(artifact);
     expect(readdirSync(parent)).toEqual([]);
+  });
+
+  test('systems get the case without its fact sheet', async () => {
+    let seen: unknown;
+    const spy: System = {
+      id: 'spy',
+      description: 'test double',
+      supports: () => ({ supported: true }),
+      async run(ctx) {
+        seen = ctx.loaded.case;
+        const a = await original.run(ctx);
+        return { ...a, system: 'spy' };
+      },
+    };
+    expect(loaded.case.facts).toBe('facts.json');
+    await runCase(loaded, spy, { sandboxParent: tempDir() });
+    expect(seen).not.toHaveProperty('facts');
+    expect(loaded.case.facts).toBe('facts.json'); // the caller's copy is untouched
   });
 
   test('refuses cases a system does not support', async () => {
@@ -79,7 +99,7 @@ describe('cli', () => {
   });
 
   test('run explains unknown systems and cases', () => {
-    expect(cli('run', '-s', 'nope').stderr).toContain('unknown system "nope" (known: original)');
+    expect(cli('run', '-s', 'nope').stderr).toContain('unknown system "nope" (known: original, claude-native, tracetoon, codex-native, codex-tracetoon)');
     expect(cli('run', '-s', 'original', '-c', 'missing').stderr).toContain('no case "missing"');
   });
 });

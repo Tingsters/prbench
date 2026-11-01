@@ -2,3 +2,5 @@ node_modules/
 results/
 *.local.*
 .DS_Store
+cases-local/
+results-*/

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "prbench": "bun run src/cli.ts",
-    "test": "bun test",
+    "test": "bun test --timeout 30000",
     "typecheck": "bun x tsc --noEmit",
     "example": "bun run scripts/make-example.ts"
   },
