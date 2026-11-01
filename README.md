@@ -40,7 +40,7 @@ bun run prbench judge --cases cases-local             # both orders, judges: cla
 - **Agent systems need their own Claude Code login.** Sandboxes have their own home directory, so run `claude setup-token` and save the token to `~/.prbench/claude-oauth-token`, or set `PRBENCH_CLAUDE_OAUTH_TOKEN`. An `ANTHROPIC_API_KEY` also works.
 - **Model and cost.** `--model` (default `opus`) and `--max-budget-usd` (default 25 per run) apply to both agent systems.
 - **Judges** use the `claude` and `codex` CLIs you are already signed in to, with tools and hooks off. Choose them with `--judges claude:opus,codex`.
-- **Caching.** Judgments are cached by prompt, so re-running `judge` only pays for new or changed pairs. `prbench report` rebuilds the report from `results/pairs.json`.
+- **Caching.** Judgments are cached by prompt, so re-running `judge` only pays for new or changed pairs. `prbench report` rebuilds the report from `results/pairs.json` and the saved judging configuration. Missing judgments are listed explicitly and excluded from judge consensus.
 
 ## How it fits together
 

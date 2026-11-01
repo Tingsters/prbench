@@ -51,7 +51,7 @@ Write the fact sheet from the diff and sessions **before** reading any descripti
 
 Real cases hold real session logs, so they live in `cases-local/`, which git ignores. Point commands at it with `--cases cases-local`.
 
-`scripts/import-tracetoon-cases.ts` builds Tracetoon's eight description-eval cases there, on the machine that recorded them. Each case gets the repository bundle, the matched sessions cut to the case's time window, Tracetoon's hand-checked fact sheet, and the published PR. Sessions end two minutes after the head commit, so the PR text written afterwards isn't in them. The three cases Tracetoon held out while designing its description rules are in the `test` split.
+`scripts/import-tracetoon-cases.ts` builds Tracetoon's eight description-eval cases there, on the machine that recorded them. Each case gets the repository bundle, the matched sessions cut to the case's time window, Tracetoon's hand-checked fact sheet, and the published PR when one exists. Sessions end ten seconds after the head commit; records that write PR text are removed throughout the slice, and importing fails if the published title or body opening remains. The three cases Tracetoon held out while designing its description rules are in the `test` split. Showtail is excluded because its contribution rules prohibit pull requests, leaving seven eligible cases.
 
 ## Privacy
 

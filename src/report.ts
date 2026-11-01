@@ -43,6 +43,11 @@ export interface Report {
   generatedAt: string;
   judges: string[];
   systems: string[];
+  coverage: {
+    expected: number;
+    completed: number;
+    missing: { case: string; split: string; x: string; y: string; judge: string }[];
+  };
   splits: Record<
     string,
     { cases: string[]; pairs: PairSummary[]; byModel: (PairSummary & { model: string })[]; systems: SystemSummary[] }
@@ -79,13 +84,13 @@ function summarizePairs(results: PairResult[], judge: string): PairSummary[] {
 }
 
 /** One result per case and pair: a system's win only when every judge gave it the win. */
-export function agreedResults(results: PairResult[]): PairResult[] {
+export function agreedResults(results: PairResult[], judges = [...new Set(results.map((r) => r.judge))]): PairResult[] {
   const groups = new Map<string, PairResult[]>();
   for (const r of results) {
     const k = `${r.case}\u0000${r.x}\u0000${r.y}`;
     groups.set(k, [...(groups.get(k) ?? []), r]);
   }
-  return [...groups.values()].map((rs) => {
+  return [...groups.values()].filter((rs) => judges.every((j) => rs.some((r) => r.judge === j))).map((rs) => {
     const verdicts = new Set(rs.map((r) => r.verdict));
     return {
       ...rs[0]!,
@@ -148,13 +153,28 @@ function summarizeSystems(
 
 export function buildReport(opts: {
   results: PairResult[];
+  judges?: string[]; // configured judges, including those with no successful results
   artifacts: Map<string, Map<string, PRArtifact>>; // case -> system -> artifact
   facts: Map<string, Facts>;
   splitOf: Map<string, string>;
 }): Report {
   const { results } = opts;
-  const judges = [...new Set(results.map((r) => r.judge))].sort();
+  const judges = [...new Set(opts.judges ?? results.map((r) => r.judge))].sort();
   const systems = [...new Set(results.flatMap((r) => [r.x, r.y]))].sort();
+  const expected = new Map<string, { case: string; split: string; x: string; y: string; judge: string }>();
+  const key = (c: string, x: string, y: string, j: string) => JSON.stringify([c, ...[x, y].sort(), j]);
+  const addPair = (c: string, split: string, x: string, y: string) => {
+    for (const judge of judges) expected.set(key(c, x, y, judge), { case: c, split, x, y, judge });
+  };
+  for (const [c, arts] of opts.artifacts) {
+    const ids = [...arts.keys()];
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) addPair(c, opts.splitOf.get(c)!, ids[i]!, ids[j]!);
+    }
+  }
+  for (const r of results) addPair(r.case, r.split, r.x, r.y);
+  const completed = new Set(results.map((r) => key(r.case, r.x, r.y, r.judge)));
+  const missing = [...expected].filter(([k]) => !completed.has(k)).map(([, p]) => p);
   const splits: Report['splits'] = {};
   for (const split of [...new Set(opts.splitOf.values())].sort()) {
     const rs = results.filter((r) => r.split === split);
@@ -162,13 +182,13 @@ export function buildReport(opts: {
     const cases = [...new Set(rs.map((r) => r.case))].sort();
     const arts = new Map([...opts.artifacts].filter(([c]) => cases.includes(c)));
     const pairs = judges.flatMap((j) => summarizePairs(rs.filter((r) => r.judge === j), j));
-    if (judges.length > 1) pairs.push(...summarizePairs(agreedResults(rs), AGREE));
+    if (judges.length > 1) pairs.push(...summarizePairs(agreedResults(rs, judges), AGREE));
     const byModel: (PairSummary & { model: string })[] = [];
     const models = [...new Set(rs.map((r) => r.model).filter((m): m is string => Boolean(m)))].sort();
     if (models.length > 1) {
       for (const model of models) {
         const mr = rs.filter((r) => r.model === model);
-        const groups = judges.length > 1 ? [...judges.map((j) => [j, mr.filter((r) => r.judge === j)] as const), [AGREE, agreedResults(mr)] as const] : [[judges[0]!, mr] as const];
+        const groups = judges.length > 1 ? [...judges.map((j) => [j, mr.filter((r) => r.judge === j)] as const), [AGREE, agreedResults(mr, judges)] as const] : [[judges[0]!, mr] as const];
         for (const [j, list] of groups) byModel.push(...summarizePairs(list, j).map((p) => ({ ...p, model })));
       }
     }
@@ -199,6 +219,7 @@ export function buildReport(opts: {
     generatedAt: new Date().toISOString(),
     judges,
     systems,
+    coverage: { expected: expected.size, completed: [...expected.keys()].filter((k) => completed.has(k)).length, missing },
     splits,
     judgeAgreement,
     warnings: [...new Set(results.flatMap((r) => r.warnings.map((w) => `${r.case}: ${w}`)))],
@@ -211,9 +232,15 @@ const pct = (x: number) => (Number.isNaN(x) ? '–' : `${Math.round(x * 100)}%`)
 export function reportMarkdown(r: Report): string {
   const out: string[] = ['# prbench report', ''];
   out.push(`Rubric v${r.rubricVersion}. Judges: ${r.judges.join(', ')}. Generated ${r.generatedAt}.`, '');
+  out.push(`Completed ${r.coverage.completed} of ${r.coverage.expected} expected case/pair/judge results (each requires both orders).`, '');
+  if (r.coverage.missing.length) {
+    out.push('## Missing judgments', '', 'These results are unavailable, not ties. Incomplete pairs are excluded from "all judges agree".', '');
+    for (const m of r.coverage.missing) out.push(`- ${m.case} (${m.split}): ${m.x} vs ${m.y} [${m.judge}]`);
+    out.push('');
+  }
   out.push(
     'Each pair is judged in both orders; a win needs both orders to agree, otherwise it is a tie (a *flip* when the orders picked opposite systems). ' +
-      `"${AGREE}" counts a win only when every judge gave it. With few cases, treat p-values and intervals as a sense of scale, not proof.`,
+      `"${AGREE}" includes only pairs completed by every configured judge, and counts a win only when every judge gave it. With few cases, treat p-values and intervals as a sense of scale, not proof.`,
     '',
   );
   for (const [split, s] of Object.entries(r.splits)) {
@@ -233,7 +260,7 @@ export function reportMarkdown(r: Report): string {
       for (const p of s.byModel) out.push(`| ${p.model} | ${p.x} vs ${p.y} | ${p.judge} | ${p.xWins} | ${p.yWins} | ${p.ties} | ${p.flips} |`);
     }
     out.push('', '### Per system (means over every judgment of that system)', '');
-    out.push('| system | judgments | factual errors | unsupported claims | claims covered | context covered | uncertainties respected | traps hit | median words | agent cost |');
+    out.push('| system | judgments | factual errors | unsupported claims | claims covered | context covered | uncertainties respected | traps hit | median words | total agent cost |');
     out.push('|---|---|---|---|---|---|---|---|---|---|');
     for (const x of s.systems) {
       out.push(

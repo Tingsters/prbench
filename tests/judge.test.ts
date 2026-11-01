@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ARTIFACT_SCHEMA, type PRArtifact } from '../src/schema/artifact.ts';
 import { FACTS_SCHEMA, loadCase, type Facts } from '../src/schema/case.ts';
@@ -11,7 +11,8 @@ import { sessionEvidence, sessionItems } from '../src/judge/evidence.ts';
 import { agreedResults, buildReport, reportMarkdown } from '../src/report.ts';
 import { bootstrapMeanCI, cohenKappa, signTest } from '../src/stats.ts';
 import { parseBudget } from '../src/systems/agentShared.ts';
-import { cleanupTemps, copyExample, EXAMPLE, tempDir } from './helpers.ts';
+import { cleanupTemps, copyExample, EXAMPLE, ROOT, tempDir } from './helpers.ts';
+import { exec } from '../src/util/exec.ts';
 
 afterAll(cleanupTemps);
 
@@ -315,6 +316,73 @@ describe('report', () => {
     expect(md).toContain('## test split (1 case)');
     expect(md).toContain('| tracetoon vs claude-native | claude:opus | 2 | 0 | 0 | 0 | 100% | 0.50 |');
     expect(md).toContain('67% of 3 pair verdicts agree');
+  });
+
+  test('missing judges cannot turn a single verdict into unanimous agreement, including model breakdowns', () => {
+    const results = [
+      { ...pr('a', 'dev', 'codex:default', 'claude-native'), model: 'opus' },
+      { ...pr('b', 'dev', 'claude:opus', 'tracetoon'), model: 'sonnet' },
+      { ...pr('b', 'dev', 'codex:default', 'tracetoon'), model: 'sonnet' },
+    ];
+    expect(agreedResults(results).map((r) => r.case)).toEqual(['b']);
+    const report = buildReport({
+      results,
+      artifacts: new Map(),
+      facts: new Map([['a', facts], ['b', facts]]),
+      splitOf: new Map([['a', 'dev'], ['b', 'dev']]),
+    });
+    expect(report.coverage).toEqual({
+      expected: 4,
+      completed: 3,
+      missing: [{ case: 'a', split: 'dev', x: 'tracetoon', y: 'claude-native', judge: 'claude:opus' }],
+    });
+    expect(report.splits.dev!.pairs.find((p) => p.judge === 'all judges agree')).toMatchObject({ n: 1, xWins: 1, yWins: 0 });
+    expect(report.splits.dev!.byModel.some((p) => p.model === 'opus' && p.judge === 'all judges agree')).toBe(false);
+    expect(reportMarkdown(report)).toContain('Completed 3 of 4 expected');
+    expect(reportMarkdown(report)).toContain('These results are unavailable, not ties.');
+  });
+
+  test('configured judges and artifacts expose failures even when a judge or case has no results', () => {
+    const arts = new Map(['a', 'b'].map((c) => [c, new Map([
+      ['tracetoon', artifact('tracetoon', 'draft')],
+      ['claude-native', artifact('claude-native', 'draft')],
+    ])]));
+    const report = buildReport({
+      results: [pr('a', 'dev', 'codex:default', 'tracetoon')],
+      judges: ['claude:opus', 'codex:default'],
+      artifacts: arts,
+      facts: new Map([['a', facts], ['b', facts]]),
+      splitOf: new Map([['a', 'dev'], ['b', 'test']]),
+    });
+    expect(report.coverage).toMatchObject({ expected: 4, completed: 1 });
+    expect(report.coverage.missing).toHaveLength(3);
+    expect(report.splits.dev!.pairs.some((p) => p.judge === 'all judges agree')).toBe(false);
+    expect(reportMarkdown(report)).toContain('b (test): tracetoon vs claude-native [codex:default]');
+  });
+
+  test('the CLI saves judging scope and preserves a wholly missing judge on report rebuild', () => {
+    const { root } = copyExample('selected');
+    const other = copyExample('other');
+    cpSync(other.dir, join(root, 'other'), { recursive: true });
+    const out = tempDir();
+    const artifacts = join(out, 'artifacts');
+    const cli = (...args: string[]) => exec([process.execPath, join(ROOT, 'src', 'cli.ts'), ...args], { cwd: ROOT });
+    // No artifacts yet: no provider is called, but the selected scope is recorded.
+    expect(cli('judge', '--cases', root, '--case', 'selected', '--systems', 'original,claude-native', '--judges', 'codex', '--out', out, '--artifacts', artifacts).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(out, 'judging.json'), 'utf8'))).toEqual({
+      judges: ['codex:default'], cases: ['selected'], systems: ['original', 'claude-native'],
+    });
+    for (const c of ['selected', 'other']) {
+      mkdirSync(join(artifacts, c), { recursive: true });
+      for (const s of ['original', 'claude-native', 'tracetoon']) {
+        writeFileSync(join(artifacts, c, `${s}.json`), JSON.stringify({ ...artifact(s, 'draft'), case: c }));
+      }
+    }
+    expect(cli('report', '--cases', root, '--out', out, '--artifacts', artifacts).code).toBe(0);
+    const report = JSON.parse(readFileSync(join(out, 'report.json'), 'utf8'));
+    expect(report.coverage).toEqual({ expected: 1, completed: 0, missing: [
+      { case: 'selected', split: 'dev', x: 'original', y: 'claude-native', judge: 'codex:default' },
+    ] });
   });
 });
 

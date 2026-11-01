@@ -218,23 +218,34 @@ program
       for (const f of failed) console.log(`FAIL  ${f}`);
       mkdirSync(resolve(opts.out), { recursive: true });
       writeFileSync(join(resolve(opts.out), 'pairs.json'), JSON.stringify(ok, null, 2) + '\n');
-      writeReport(ok, loaded, resolve(opts.artifacts), systems, resolve(opts.out));
+      writeReport(ok, loaded.filter((l) => !wanted || wanted.includes(l.case.id)), resolve(opts.artifacts), systems, resolve(opts.out), judges.map((j) => j.id));
       if (failed.length) process.exitCode = 1;
     },
   );
 
-function writeReport(results: PairResult[], loaded: LoadedCase[], artifactsDir: string, systems: string[], out: string): void {
-  const used = new Set(results.map((r) => r.case));
+function writeReport(results: PairResult[], loaded: LoadedCase[], artifactsDir: string, systems: string[], out: string, judges?: string[]): void {
+  const planPath = join(out, 'judging.json');
+  if (judges) writeFileSync(planPath, JSON.stringify({ judges, cases: loaded.map((l) => l.case.id), systems }, null, 2) + '\n');
+  else if (existsSync(planPath)) {
+    const plan = JSON.parse(readFileSync(planPath, 'utf8')) as { judges: string[]; cases: string[]; systems: string[] };
+    judges = plan.judges;
+    loaded = loaded.filter((l) => plan.cases.includes(l.case.id));
+    systems = systems.filter((s) => plan.systems.includes(s));
+  }
   const facts = new Map<string, Facts>();
   const artifacts = new Map<string, Map<string, PRArtifact>>();
   const splitOf = new Map<string, string>();
   for (const l of loaded) {
-    if (!used.has(l.case.id)) continue;
-    facts.set(l.case.id, loadFacts(l)!);
-    artifacts.set(l.case.id, readArtifacts(artifactsDir, l.case.id, systems));
+    if (l.case.excluded) continue;
+    const arts = readArtifacts(artifactsDir, l.case.id, systems);
+    if (arts.size < 2) continue;
+    const f = loadFacts(l);
+    if (!f) continue;
+    facts.set(l.case.id, f);
+    artifacts.set(l.case.id, arts);
     splitOf.set(l.case.id, l.case.split);
   }
-  const report = buildReport({ results, artifacts, facts, splitOf });
+  const report = buildReport({ results, judges, artifacts, facts, splitOf });
   writeFileSync(join(out, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   writeFileSync(join(out, 'report.md'), reportMarkdown(report));
   console.log(`report: ${join(out, 'report.md')}`);
