@@ -3,7 +3,7 @@
 // keyed by the prompt, and reports state the version.
 import type { Facts } from '../schema/case.ts';
 
-export const RUBRIC_VERSION = 1;
+export const RUBRIC_VERSION = 2;
 
 /**
  * Reviewer-usefulness items, scored 0 (missing or misleading), 1 (partial),
@@ -92,9 +92,21 @@ export interface PromptInput {
   diff: string;
   a: { title: string; body: string };
   b: { title: string; body: string };
+  /** Excerpt of the work sessions (see evidence.ts), so session-based claims can be checked. */
+  evidence?: string;
   /** Characters of diff to include before truncating. */
   diffBudget?: number;
 }
+
+/**
+ * Told to every judge. Agent systems write after the work, in a fresh copy of
+ * the repository with no installed dependencies or sibling checkouts, so a
+ * true "the tests couldn't run here" shouldn't count against them.
+ */
+export const PREPARATION_NOTE =
+  'A description may have been written after the work was finished, in a fresh copy of the repository without installed ' +
+  'dependencies or sibling checkouts, so tests and builds often could not run there. Statements that a check could not run ' +
+  'in that environment are accurate. Claims that checks passed are supported only if the session evidence shows them passing.';
 
 function numbered(prefix: string, items: string[]): string {
   return items.length ? items.map((t, i) => `${prefix}${i + 1}. ${t}`).join('\n') : '(none)';
@@ -134,6 +146,14 @@ ${input.commits.map((c) => `- ${c.split('\n')[0]}`).join('\n') || '(none)'}
 ${diff}
 DIFF>>>
 
+## Session evidence (excerpt of what the work sessions recorded: requests, commands and their key output)
+<<<SESSIONS
+${input.evidence ?? '(not available)'}
+SESSIONS>>>
+
+## How these descriptions were prepared
+${PREPARATION_NOTE}
+
 # Description A
 <<<A
 Title: ${input.a.title}
@@ -150,8 +170,8 @@ B>>>
 
 # How to judge
 For each description, list:
-- factualErrors: statements contradicted by the diff or the fact sheet (quote or paraphrase each).
-- unsupportedClaims: statements neither the diff nor the fact sheet establishes, including claimed test results or checks the fact sheet doesn't support.
+- factualErrors: statements contradicted by the diff, the fact sheet or the session evidence (quote or paraphrase each).
+- unsupportedClaims: statements that none of the diff, the fact sheet and the session evidence establishes, including claimed test results or checks they don't show. A statement the session evidence supports is supported. A statement that a check couldn't run where the description was prepared is not an unsupported claim (see "How these descriptions were prepared").
 - claimsCovered / contextCovered: ids (C1, X2, ...) of fact-sheet items the text conveys accurately.
 - uncertaintiesRespected: ids (U1, ...) the text states honestly or at least doesn't overclaim.
 - trapsHit: ids (T1, ...) of traps the text falls into.

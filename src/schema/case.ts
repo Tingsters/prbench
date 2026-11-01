@@ -34,6 +34,8 @@ export interface CaseRepo {
    * sandbox checkout and its parent. Defaults to the first session's cwd.
    */
   recordedPath?: string;
+  /** When the base commit was made (ISO). Judges read session evidence from this point on. */
+  baseTime?: string;
 }
 
 export interface CaseSession {
@@ -128,6 +130,9 @@ export function checkCase(value: unknown, dir?: string): Problems {
     c.string(r.base, 'repo.base', { pattern: SHA });
     c.string(r.head, 'repo.head', { optional: mode !== 'replay', pattern: SHA });
     c.string(r.recordedPath, 'repo.recordedPath', { optional: true });
+    if (c.string(r.baseTime, 'repo.baseTime', { optional: true }) && r.baseTime !== undefined && Number.isNaN(Date.parse(r.baseTime as string))) {
+      c.fail('repo.baseTime', 'expected an ISO timestamp');
+    }
     if (c.string(r.branch, 'repo.branch', { optional: true }) && r.branch === 'main') {
       c.fail('repo.branch', 'must not be "main": the sandbox keeps main at the base commit');
     }

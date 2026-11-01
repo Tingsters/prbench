@@ -54,7 +54,9 @@ The sandbox isolates discovery; it is not a security boundary. A process that us
 
 ## Session slices
 
-Real sessions are long and cover more than one change. The importer (`scripts/import-tracetoon-cases.ts`) keeps only records from an hour before the base commit to two minutes after the head commit. Cutting at the head commit keeps the PR text the original agent wrote afterwards out of the logs, so no system can copy the `original` PR. The importer's output is checked for the published titles and for `gh pr create`.
+Real sessions are long and cover more than one change. The importer (`scripts/import-tracetoon-cases.ts`) keeps only records from an hour before the base commit to ten seconds after the head commit, and drops every record that writes PR text (Tracetoon run folders, `gh pr create` or `edit`), wherever it falls. The import fails if the published title or the opening of the published body still appears in a slice. A first version used a two-minute margin, which let one case include the original session drafting that case's published description; it was caught before any results were reported.
+
+A slice may not start with a record bigger than 64 KB: readers find a session's working directory in the first 128 KB of the file, so a huge first record hides the whole session.
 
 ## Judging
 
@@ -63,7 +65,8 @@ Real sessions are long and cover more than one change. The importer (`scripts/im
 - **Blind and normalized.** Tool markers, HTML comments, comics, comic transcripts and attribution footers ("Assisted-by", "Generated with Claude Code", "Co-Authored-By") are stripped before judging, so judges compare descriptions, not branding. Judges never see a tool's own self-review.
 - **Both orders.** Each pair is judged with each system in position A once. A win needs both orders to agree; otherwise it is a tie, and a *flip* when the orders picked opposite systems.
 - **Two model families.** `claude -p` (tools off, hooks off, no saved session) and `codex exec` (ephemeral, read-only), both run from an empty temp directory with structured output. A pair's result is reported per judge and as "all judges agree".
-- **What a judge returns** (`src/judge/rubric.ts`, rubric v1): per description, factual errors, unsupported claims, fact-sheet claims and context covered, uncertainties respected, traps hit, and 0–2 scores on ten reviewer-usefulness items (Tracetoon's rubric v2 plus requested feedback, links and scope). Then a preference with a reason. Accuracy comes first, then usefulness, then the reader's effort; length is not a virtue.
+- **What a judge sees.** The fact sheet, commits and diff. A neutral excerpt of the work sessions (`src/judge/evidence.ts`): the user's requests, the commands run with the key lines of their output, and the files edited, from just before the base commit on. prbench builds the excerpt from the raw logs, never from a system's output. Without it, every claim a session-reading tool takes from the logs ("the full suite passed before the last edit") counted as unsupported. In the first judging round (rubric v1) that was most of Tracetoon's "unsupported claims". Judges also get a note that agent systems prepare PRs in a fresh copy without installed dependencies, so "the checks couldn't run here" is accurate, and a claim that checks passed needs session evidence.
+- **What a judge returns** (`src/judge/rubric.ts`, rubric v2): per description, factual errors, unsupported claims, fact-sheet claims and context covered, uncertainties respected, traps hit, and 0–2 scores on ten reviewer-usefulness items (Tracetoon's rubric v2 plus requested feedback, links and scope). Then a preference with a reason. Accuracy comes first, then usefulness, then the reader's effort; length is not a virtue.
 - **Caching.** Each judgment is stored under `results/judgments/` with a hash of its prompt and reused while the prompt is unchanged.
 - **Statistics** (`src/stats.ts`): win counts, win rate, an exact two-sided sign test, a 95% bootstrap interval on the mean per-case result, and Cohen's kappa between judges. Dev and test splits are reported separately.
 

@@ -6,11 +6,12 @@ import { FACTS_SCHEMA, loadCase, type Facts } from '../src/schema/case.ts';
 import { normalizeBody, wordCount } from '../src/judge/normalize.ts';
 import { combine, judgePair, judgmentPath, type StoredJudgment } from '../src/judge/pairwise.ts';
 import { extractJson, parseJudge, type JudgeProvider } from '../src/judge/providers.ts';
-import { buildPrompt, checkJudgment, JUDGMENT_SCHEMA, RUBRIC_KEYS, type Judgment, type SideJudgment } from '../src/judge/rubric.ts';
+import { buildPrompt, checkJudgment, JUDGMENT_SCHEMA, PREPARATION_NOTE, RUBRIC_KEYS, type Judgment, type SideJudgment } from '../src/judge/rubric.ts';
+import { sessionEvidence, sessionItems } from '../src/judge/evidence.ts';
 import { agreedResults, buildReport, reportMarkdown } from '../src/report.ts';
 import { bootstrapMeanCI, cohenKappa, signTest } from '../src/stats.ts';
 import { parseBudget } from '../src/systems/agentShared.ts';
-import { cleanupTemps, EXAMPLE, tempDir } from './helpers.ts';
+import { cleanupTemps, copyExample, EXAMPLE, tempDir } from './helpers.ts';
 
 afterAll(cleanupTemps);
 
@@ -314,5 +315,39 @@ describe('report', () => {
     expect(md).toContain('## test split (1 case)');
     expect(md).toContain('| tracetoon vs claude-native | claude:opus | 2 | 0 | 0 | 0 | 100% | 0.50 |');
     expect(md).toContain('67% of 3 pair verdicts agree');
+  });
+});
+
+describe('session evidence', () => {
+  test('lists requests and key commands with their outcomes, then edited files', () => {
+    const e = sessionEvidence(loadCase(EXAMPLE));
+    expect(e).toContain("USER: greet() prints 'Hello, undefined!'");
+    expect(e).toContain('$ bun test\n        -> 2 pass | 0 fail | Ran 2 tests across 1 file.');
+    expect(e).toContain('$ git commit -am');
+    expect(e).toContain('Files edited in the sessions: /work/greet/greet.js, /work/greet/greet.test.js');
+    expect(e).not.toContain('Read'); // file reads are left out
+  });
+
+  test('starts shortly before the base commit', () => {
+    const { dir } = copyExample('later-base', (c) => (c.repo.baseTime = '2026-01-07T00:00:00Z'));
+    expect(sessionEvidence(loadCase(dir))).toBe('(no recorded sessions)');
+  });
+
+  test('reads Codex rollouts', () => {
+    const lines = [
+      { timestamp: '2026-01-01T10:00:00Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Fix the build' }] } },
+      { timestamp: '2026-01-01T10:01:00Z', type: 'response_item', payload: { type: 'function_call', name: 'shell', call_id: 'c1', arguments: '{"command":["cargo","test"]}' } },
+      { timestamp: '2026-01-01T10:02:00Z', type: 'response_item', payload: { type: 'function_call_output', call_id: 'c1', output: 'running 3 tests\ntest result: ok. 3 passed; 0 failed' } },
+    ].map((l) => JSON.stringify(l)).join('\n');
+    const items = sessionItems(lines, 'codex');
+    expect(items.map((i) => [i.kind, i.weight])).toEqual([['user', 3], ['command', 2]]);
+    expect(items[1]!.result).toContain('3 passed; 0 failed');
+  });
+
+  test('the prompt carries the evidence and the preparation note', () => {
+    const p = buildPrompt({ caseTitle: 'T', facts, commits: [], diff: '', evidence: '[10:00] $ bun test', a: { title: 'a', body: 'a' }, b: { title: 'b', body: 'b' } });
+    expect(p).toContain('<<<SESSIONS\n[10:00] $ bun test\nSESSIONS>>>');
+    expect(p).toContain(PREPARATION_NOTE);
+    expect(p).toContain('A statement the session evidence supports is supported.');
   });
 });

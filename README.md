@@ -20,7 +20,7 @@ bun run prbench validate                 # check every case under cases/
 bun run prbench systems                  # list systems
 bun run prbench run -s original          # write results/artifacts/<case>/original.json
 bun run prbench check-artifact results/artifacts/example-greet-default/original.json
-bun test
+bun run test
 bun run typecheck
 ```
 

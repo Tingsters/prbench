@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PRArtifact } from '../schema/artifact.ts';
 import type { Facts, LoadedCase } from '../schema/case.ts';
+import { sessionEvidence } from './evidence.ts';
 import { normalizeBody, normalizeTitle } from './normalize.ts';
 import { extractJson, type JudgeProvider } from './providers.ts';
 import { buildPrompt, checkJudgment, RUBRIC_VERSION, type Judgment, type SideJudgment } from './rubric.ts';
@@ -42,15 +43,33 @@ export interface PairResult {
   warnings: string[];
 }
 
-export function promptFor(caseTitle: string, facts: Facts, first: PRArtifact, a: PRArtifact, b: PRArtifact): string {
+export function promptFor(
+  caseTitle: string,
+  facts: Facts,
+  first: PRArtifact,
+  a: PRArtifact,
+  b: PRArtifact,
+  evidence?: string,
+): string {
   return buildPrompt({
     caseTitle,
     facts,
     commits: first.commits.map((c) => c.message),
     diff: first.diff,
+    evidence,
     a: { title: normalizeTitle(a.title), body: normalizeBody(a.body) },
     b: { title: normalizeTitle(b.title), body: normalizeBody(b.body) },
   });
+}
+
+const evidenceCache = new Map<string, string>();
+function evidenceFor(loaded: LoadedCase): string {
+  let e = evidenceCache.get(loaded.dir);
+  if (e === undefined) {
+    e = sessionEvidence(loaded);
+    evidenceCache.set(loaded.dir, e);
+  }
+  return e;
 }
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -134,7 +153,7 @@ export async function judgePair(opts: {
     const [a, b] = order === 'ab' ? [x, y] : [y, x];
     return judgeOnce(
       judge,
-      promptFor(c.title, facts, x, a, b),
+      promptFor(c.title, facts, x, a, b, evidenceFor(loaded)),
       { case: c.id, order, labels: { A: a.system, B: b.system } },
       judgmentPath(outDir, c.id, judge.id, x.system, y.system, order),
       opts.force ?? false,

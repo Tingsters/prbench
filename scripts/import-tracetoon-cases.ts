@@ -173,7 +173,7 @@ for (const c of CASES) {
       title: c.name,
       split: 'heldOut' in c && c.heldOut ? 'test' : 'dev',
       mode: 'replay',
-      repo: { bundle: 'repo.bundle', base, head, recordedPath: repo },
+      repo: { bundle: 'repo.bundle', base, head, recordedPath: repo, baseTime: new Date(commitTime(repo, base)).toISOString() },
       task: `The change that became ${c.repo}${'pr' in c ? ` PR #${c.pr}` : ''}: ${c.name}.`,
       sessions,
       facts: 'facts.json',

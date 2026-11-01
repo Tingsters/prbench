@@ -1,3 +1,0 @@
-[test]
-# Sandbox tests run git several times; 5s is too tight on a busy machine.
-timeout = 30000
