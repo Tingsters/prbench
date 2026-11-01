@@ -15,6 +15,7 @@ import { RUBRIC_KEYS } from '../src/judge/rubric.ts';
 import { ARTIFACT_SCHEMA } from '../src/schema/artifact.ts';
 import { runAgentProcess } from '../src/agents/process.ts';
 import { createSandbox } from '../src/run/sandbox.ts';
+import { tracetoonDraft } from '../src/systems/tracetoon.ts';
 
 afterAll(cleanupTemps);
 const saved: Record<string, string | undefined> = {};
@@ -119,6 +120,20 @@ test('prose AI-review disclosures cannot reveal the system to a blind judge', ()
     'Description prepared from session logs with Tracetoon and independently reviewed by AI agents. No human review was captured.',
     'This description was prepared with AI from session logs and independently reviewed by an AI agent.\nNo human author review was captured.',
   ]) expect(normalizeBody(`${content}\n\n${disclosure}`)).toBe(content);
+});
+
+test('an empty latest Tracetoon run cannot hide an earlier ready draft', () => {
+  const gitDir = tempDir(), runs = join(gitDir, 'tracetoon', 'runs');
+  const ready = join(runs, '20260101-000000'), empty = join(runs, '20260101-000001');
+  mkdirSync(ready, { recursive: true }); mkdirSync(empty);
+  writeFileSync(join(ready, 'title.txt'), 'A finished draft');
+  writeFileSync(join(ready, 'final-body.md'), 'The finished body.');
+  writeFileSync(join(ready, 'task.json'), '{"state":"ready"}');
+  writeFileSync(join(runs, 'latest'), '20260101-000001');
+  expect(tracetoonDraft(gitDir)).toMatchObject({ run: '20260101-000000', title: 'A finished draft', body: 'The finished body.', state: 'ready', rendered: true });
+  writeFileSync(join(empty, 'title.txt'), 'The selected draft');
+  writeFileSync(join(empty, 'body.md'), 'The selected body.');
+  expect(tracetoonDraft(gitDir)).toMatchObject({ run: '20260101-000001', title: 'The selected draft', rendered: false });
 });
 
 test('an exited agent does not wait for a background child to close inherited pipes', async () => {

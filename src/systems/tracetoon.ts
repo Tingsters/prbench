@@ -3,7 +3,7 @@
 // the flow ends at a local preview waiting for the author's approval, so the
 // PR text is read from Tracetoon's run folder (title.txt, final-body.md).
 // Comics are turned off: they're judged separately, if at all.
-import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describeRun, runClaude } from '../agents/claude.ts';
@@ -44,27 +44,30 @@ export function installTracetoon(sandbox: Sandbox, agent: 'claude-code' | 'codex
   return { env, version, skill };
 }
 
-/** The PR text in Tracetoon's newest run folder (under the git directory), if it got that far. */
+/** Prefer the selected run, falling back to recent drafts if a later empty run hides them. */
 export function tracetoonDraft(gitDir: string): { title: string; body: string; rendered: boolean; run: string; state?: string } | undefined {
   const runs = join(gitDir, 'tracetoon', 'runs');
+  if (!existsSync(runs)) return undefined;
   const latest = join(runs, 'latest');
-  if (!existsSync(latest)) return undefined;
-  const run = readFileSync(latest, 'utf8').trim();
-  const dir = join(runs, run);
-  const titleFile = join(dir, 'title.txt');
-  const final = join(dir, 'final-body.md');
-  const draft = join(dir, 'body.md');
-  if (!existsSync(titleFile) || !(existsSync(final) || existsSync(draft))) return undefined;
-  const rendered = existsSync(final);
-  const taskFile = join(dir, 'task.json');
-  const task = existsSync(taskFile) ? JSON.parse(readFileSync(taskFile, 'utf8')) as { state?: string } : undefined;
-  return {
-    title: readFileSync(titleFile, 'utf8').trim(),
-    body: readFileSync(rendered ? final : draft, 'utf8'),
-    rendered,
-    run,
-    state: task?.state,
-  };
+  const selected = existsSync(latest) ? readFileSync(latest, 'utf8').trim() : '';
+  const recent = readdirSync(runs, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort().reverse();
+  for (const run of new Set([selected, ...recent].filter(Boolean))) {
+    const dir = join(runs, run);
+    const titleFile = join(dir, 'title.txt');
+    const final = join(dir, 'final-body.md');
+    const draft = join(dir, 'body.md');
+    if (!existsSync(titleFile) || !(existsSync(final) || existsSync(draft))) continue;
+    const rendered = existsSync(final);
+    const taskFile = join(dir, 'task.json');
+    const task = existsSync(taskFile) ? JSON.parse(readFileSync(taskFile, 'utf8')) as { state?: string } : undefined;
+    return {
+      title: readFileSync(titleFile, 'utf8').trim(),
+      body: readFileSync(rendered ? final : draft, 'utf8'),
+      rendered,
+      run,
+      state: task?.state,
+    };
+  }
 }
 
 export function tracetoonSystem(options: Partial<AgentOptions> = {}): System {
