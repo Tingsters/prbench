@@ -1,4 +1,6 @@
 /** Provider-neutral terminal result used to build PR artifacts. */
+import type { ValidationEvidence } from '../schema/validation.ts';
+
 export interface AgentRunResult {
   exitCode: number;
   timedOut: boolean;
@@ -11,4 +13,5 @@ export interface AgentRunResult {
   durationMs: number;
   stderr: string;
   cleanupTerminated?: boolean;
+  validation?: ValidationEvidence;
 }

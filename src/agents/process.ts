@@ -6,7 +6,8 @@ export async function runAgentProcess(cmd: string[], opts: {
   prompt: string;
   timeoutMs: number;
   terminalEvent?: (line: string) => 'success' | 'failure' | undefined;
-}): Promise<{ exitCode: number; timedOut: boolean; stdout: string; stderr: string; cleanupTerminated: boolean }> {
+  onLine?: (line: string) => void;
+}): Promise<{ exitCode: number; timedOut: boolean; stdout: string; stderr: string; cleanupTerminated: boolean; outputComplete: boolean }> {
   const proc = Bun.spawn(cmd, { cwd: opts.cwd, env: opts.env, stdin: new Blob([opts.prompt]), stdout: 'pipe', stderr: 'pipe' });
   const stop = () => {
     // Windows preview descendants can keep the sandbox directory locked even
@@ -27,22 +28,23 @@ export async function runAgentProcess(cmd: string[], opts: {
       if (chunk.done) break;
       const value = decoder.decode(chunk.value, { stream: true });
       text[i] += value;
-      if (i === 0 && opts.terminalEvent && !terminal) {
+      if (i === 0) {
         pendingLine += value;
         const lines = pendingLine.split('\n');
         pendingLine = lines.pop()!;
         for (const line of lines) {
-          terminal = opts.terminalEvent(line);
-          if (terminal) {
+          opts.onLine?.(line);
+          if (!terminal) terminal = opts.terminalEvent?.(line);
+          if (terminal && !completionTimer) {
             completionTimer = setTimeout(() => {
               if (proc.exitCode === null) { cleanupTerminated = true; stop(); }
             }, 2000);
-            break;
           }
         }
       }
     }
     text[i] += decoder.decode();
+    if (i === 0 && pendingLine) { opts.onLine?.(pendingLine); pendingLine = ''; }
   });
   let readFailed = false;
   const reading = Promise.all(pumps).then(() => true, () => { readFailed = true; return true; });
@@ -61,7 +63,7 @@ export async function runAgentProcess(cmd: string[], opts: {
       void Promise.allSettled(pumps);
     }
     if (readFailed) throw new Error('Could not collect the agent process output.');
-    return { exitCode: cleanupTerminated ? (terminal === 'success' ? 0 : 1) : exitCode, timedOut, stdout: text[0]!, stderr: text[1]!, cleanupTerminated };
+    return { exitCode: cleanupTerminated ? (terminal === 'success' ? 0 : 1) : exitCode, timedOut, stdout: text[0]!, stderr: text[1]!, cleanupTerminated, outputComplete: drained };
   } finally {
     clearTimeout(timer);
     clearTimeout(drainTimer);

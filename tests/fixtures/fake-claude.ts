@@ -39,6 +39,12 @@ function sh(cmd: string[]): void {
 }
 
 const mode = process.env.FAKE_CLAUDE_MODE ?? 'nothing';
+if (mode === 'native' || mode === 'tracetoon') {
+  console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'fresh-check', name: 'Bash', input: { command: 'bun test', cwd: process.cwd() } }] } }));
+  await Bun.sleep(80);
+  const check = Bun.spawnSync([process.execPath, 'test'], { stdout: 'pipe', stderr: 'pipe' });
+  console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'fresh-check', is_error: check.exitCode !== 0, content: check.stdout.toString() + check.stderr.toString() }] } }));
+}
 if (mode === 'native') {
   sh(['git', 'push', '--quiet', '-u', 'origin', 'HEAD']);
   sh(['gh', 'pr', 'create', '--title', 'Fallback to world', '--body', 'Greets world when no name is given.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)']);

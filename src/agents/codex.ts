@@ -2,6 +2,7 @@ import type { Sandbox } from '../run/sandbox.ts';
 import type { AgentRunResult } from './types.ts';
 import { codexCommand, codexRunEnv, withCodexAuth } from './codexAuth.ts';
 import { runAgentProcess } from './process.ts';
+import { startValidationCapture } from './validation.ts';
 
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
@@ -63,11 +64,12 @@ export async function runCodex(sandbox: Sandbox, opts: CodexRunOptions): Promise
     ];
     opts.log?.(`codex exec --model ${opts.model} --reasoning-effort ${opts.reasoningEffort}`);
     const env = codexRunEnv({ ...sandbox.env, ...opts.env });
+    const capture = startValidationCapture(sandbox, env);
     const result = await runAgentProcess(cmd, {
       cwd: sandbox.repo,
-      env, prompt: opts.prompt, timeoutMs: opts.timeoutMs, terminalEvent: codexTerminalEvent,
+      env, prompt: opts.prompt, timeoutMs: opts.timeoutMs, terminalEvent: codexTerminalEvent, onLine: capture.line,
     });
     const parsed = parseCodexResult(result.stdout);
-    return { ...parsed, exitCode: result.exitCode, timedOut: result.timedOut, cleanupTerminated: result.cleanupTerminated, isError: Boolean(parsed.isError || result.exitCode !== 0), durationMs: Date.now() - started, stderr: result.stderr.slice(-4000) };
+    return { ...parsed, validation: capture.finish(result), exitCode: result.exitCode, timedOut: result.timedOut, cleanupTerminated: result.cleanupTerminated, isError: Boolean(parsed.isError || result.exitCode !== 0), durationMs: Date.now() - started, stderr: result.stderr.slice(-4000) };
   });
 }

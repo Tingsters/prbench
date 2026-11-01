@@ -4,12 +4,13 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { PRArtifact } from '../schema/artifact.ts';
+import { artifactDigest, type PRArtifact } from '../schema/artifact.ts';
 import type { Facts, LoadedCase } from '../schema/case.ts';
 import { sessionEvidence } from './evidence.ts';
 import { normalizeBody, normalizeTitle } from './normalize.ts';
 import { extractJson, type JudgeProvider } from './providers.ts';
 import { buildPrompt, checkJudgment, RUBRIC_VERSION, type Judgment, type SideJudgment } from './rubric.ts';
+import { validationPacket } from './validation.ts';
 
 export type Order = 'ab' | 'ba';
 
@@ -27,6 +28,9 @@ export interface StoredJudgment {
 }
 
 export interface PairResult {
+  rubricVersion: number;
+  /** Always set by judgePair. Optional for external/synthetic result importers. */
+  artifactDigests?: Record<string, string>;
   case: string;
   split: string;
   judge: string;
@@ -57,8 +61,8 @@ export function promptFor(
     commits: first.commits.map((c) => c.message),
     diff: first.diff,
     evidence,
-    a: { title: normalizeTitle(a.title), body: normalizeBody(a.body) },
-    b: { title: normalizeTitle(b.title), body: normalizeBody(b.body) },
+    a: { title: normalizeTitle(a.title), body: normalizeBody(a.body), validation: a.validation, ...(a.diff !== b.diff ? { diff: a.diff } : {}) },
+    b: { title: normalizeTitle(b.title), body: normalizeBody(b.body), validation: b.validation, ...(a.diff !== b.diff ? { diff: b.diff } : {}) },
   });
 }
 
@@ -76,19 +80,20 @@ const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const safe = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, '_');
 
 export function judgmentPath(outDir: string, caseId: string, judge: string, x: string, y: string, order: Order): string {
-  return join(outDir, caseId, safe(judge), `${x}__${y}__${order}.json`);
+  return join(outDir, `v${RUBRIC_VERSION}`, caseId, safe(judge), `${x}__${y}__${order}.json`);
 }
 
 /** Maps an order's preference back to a system id, or "tie". */
 export function preferredSystem(stored: StoredJudgment): string {
   const p = stored.judgment.preferred;
-  return p === 'tie' ? 'tie' : stored.labels[p];
+  return p === 'tie' || p === 'inconclusive' ? p : stored.labels[p];
 }
 
 /** Combines the two orders: a win needs both orders to agree. */
 export function combine(ab: StoredJudgment, ba: StoredJudgment): { verdict: string; flipped: boolean } {
   const p1 = preferredSystem(ab);
   const p2 = preferredSystem(ba);
+  if (p1 === 'inconclusive' || p2 === 'inconclusive') return { verdict: 'inconclusive', flipped: false };
   if (p1 === p2) return { verdict: p1, flipped: false };
   return { verdict: 'tie', flipped: p1 !== 'tie' && p2 !== 'tie' };
 }
@@ -99,11 +104,12 @@ async function judgeOnce(
   meta: Omit<StoredJudgment, 'judgment' | 'promptSha' | 'rubricVersion' | 'at' | 'judge' | 'costUsd'>,
   path: string,
   force: boolean,
+  refs: { A: Set<string>; B: Set<string> },
 ): Promise<StoredJudgment> {
   const promptSha = sha(prompt);
   if (!force && existsSync(path)) {
     const cached = JSON.parse(readFileSync(path, 'utf8')) as StoredJudgment;
-    if (cached.promptSha === promptSha) return cached;
+    if (cached.rubricVersion === RUBRIC_VERSION && cached.promptSha === promptSha && !checkJudgment(cached.judgment, refs).length) return cached;
   }
   let lastError = '';
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -115,7 +121,7 @@ async function judgeOnce(
       lastError = String(err);
       continue;
     }
-    const problems = checkJudgment(parsed);
+    const problems = checkJudgment(parsed, refs);
     if (problems.length) {
       lastError = problems.join('; ');
       continue;
@@ -148,15 +154,24 @@ export async function judgePair(opts: {
   const { loaded, facts, x, y, judge, outDir } = opts;
   const c = loaded.case;
   const warnings: string[] = [];
-  if (x.diff !== y.diff) warnings.push(`${x.system} and ${y.system} propose different diffs; judged against ${x.system}'s`);
+  for (const a of [x, y]) if (!a.validation || a.validation.coverage !== 'recorded') warnings.push(`${a.system}: fresh validation evidence ${a.validation?.coverage ?? 'unavailable (legacy artifact)'}`);
+  if (x.diff !== y.diff) warnings.push(`${x.system} and ${y.system} propose different diffs; each description receives its own proposed diff`);
   const run = (order: Order) => {
     const [a, b] = order === 'ab' ? [x, y] : [y, x];
+    const original = evidenceFor(loaded);
+    const shared = ['D', ...x.commits.map((_, i) => `K${i + 1}`),
+      ...facts.claims.map((_, i) => `C${i + 1}`), ...facts.context.map((_, i) => `X${i + 1}`),
+      ...facts.uncertainties.map((_, i) => `U${i + 1}`), ...facts.traps.map((_, i) => `T${i + 1}`),
+      ...[...original.matchAll(/^\[(S\d+)\]/gm)].map((m) => m[1]!)];
+    const references = (artifact: PRArtifact, label: 'A' | 'B') => new Set([...shared,
+      ...validationPacket(artifact.validation, label).refs, ...(a.diff !== b.diff ? [`${label}.D`] : [])]);
     return judgeOnce(
       judge,
-      promptFor(c.title, facts, x, a, b, evidenceFor(loaded)),
+      promptFor(c.title, facts, x, a, b, original),
       { case: c.id, order, labels: { A: a.system, B: b.system } },
       judgmentPath(outDir, c.id, judge.id, x.system, y.system, order),
       opts.force ?? false,
+      { A: references(a, 'A'), B: references(b, 'B') },
     );
   };
   const ab = await run('ab');
@@ -171,6 +186,8 @@ export async function judgePair(opts: {
   }
   const model = x.meta.model ?? y.meta.model;
   return {
+    rubricVersion: RUBRIC_VERSION,
+    artifactDigests: { [x.system]: artifactDigest(x), [y.system]: artifactDigest(y) },
     case: c.id,
     split: c.split,
     judge: judge.id,

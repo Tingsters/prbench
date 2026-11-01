@@ -79,6 +79,8 @@ describe('agent systems', () => {
     expect(artifact.system).toBe('claude-native');
     expect(artifact.title).toBe('Fallback to world');
     expect(artifact.body).toContain('Greets world');
+    expect(artifact.validation?.commands).toEqual(expect.arrayContaining([expect.objectContaining({ command: 'bun test', outcome: 'completed', output: expect.stringContaining('2 pass') })]));
+    expect(artifact.validation?.commands[0]?.before?.fingerprint).toHaveLength(64);
     expect(artifact.head).toBe(loaded.case.repo.head!);
     expect(artifact.diff).toContain('+++ b/greet.js');
     expect(artifact.meta).toMatchObject({ tool: 'claude-code-native', toolVersion: '9.9.9', model: 'sonnet', costUsd: 0.42, inputTokens: 150, outputTokens: 20 });
@@ -111,6 +113,7 @@ describe('agent systems', () => {
 
     expect(artifact.title).toBe("Greet 'world' when no name is given");
     expect(artifact.body).toContain('greet() now falls back to world.');
+    expect(artifact.validation?.commands.some((c) => c.command === 'bun test' && c.output.includes('2 pass'))).toBe(true);
     expect(artifact.meta).toMatchObject({ tool: 'tracetoon', toolVersion: '0.0.0-test', model: 'opus' });
     expect(artifact.meta.notes).toContain('tracetoon run 20260101-000000');
   });

@@ -2,6 +2,8 @@
 // test. Metrics only ever see artifacts, never the tool that made them, so any
 // PR-writing tool can be compared with any other.
 import { Checker, type Problems } from './check.ts';
+import { checkValidation, type ValidationEvidence } from './validation.ts';
+import { createHash } from 'node:crypto';
 
 export const ARTIFACT_SCHEMA = 'prbench.artifact/v1';
 
@@ -38,12 +40,20 @@ export interface PRArtifact {
   /** Unified diff from base to head: the code the PR proposes. */
   diff: string;
   meta: ArtifactMeta;
+  /** Optional for v1 compatibility; absence means evidence unavailable, never failure. */
+  validation?: ValidationEvidence;
+}
+
+/** Binds saved judgments to the exact artifact, including fresh evidence. */
+export function artifactDigest(artifact: PRArtifact): string {
+  return createHash('sha256').update(JSON.stringify(artifact)).digest('hex');
 }
 
 export function checkArtifact(value: unknown): Problems {
   const c = new Checker();
   if (!c.object(value, '')) return c.problems;
   const v = value as Record<string, unknown>;
+  if (v.validation !== undefined) c.problems.push(...checkValidation(v.validation));
   if (v.schema !== ARTIFACT_SCHEMA) c.fail('schema', `expected "${ARTIFACT_SCHEMA}"`);
   c.string(v.case, 'case');
   c.string(v.system, 'system');

@@ -12,6 +12,8 @@ import { parseJudge } from './judge/providers.ts';
 import { buildReport, reportMarkdown } from './report.ts';
 import { codexLogin } from './agents/codexAuth.ts';
 import { DEFAULT_CODEX_OPTIONS } from './systems/codex.ts';
+import { RUBRIC_VERSION } from './judge/rubric.ts';
+import { auditEvidence } from './audit.ts';
 
 const program = new Command('prbench').description(
   'Evaluate tools that write or change the pull requests AI coding agents produce.',
@@ -196,6 +198,13 @@ program
   .option('--force', 'judge again even when a cached judgment matches')
   .action(
     async (opts: { systems: string; judges: string; split?: string; case?: string; cases: string; artifacts: string; out: string; jobs: string; force?: boolean }) => {
+      const existingPairs = join(resolve(opts.out), 'pairs.json');
+      const existingReport = join(resolve(opts.out), 'report.json');
+      const existingPlan = join(resolve(opts.out), 'judging.json');
+      if ((existsSync(existingPairs) && (JSON.parse(readFileSync(existingPairs, 'utf8')) as PairResult[]).some((r) => r.rubricVersion !== RUBRIC_VERSION)) ||
+        [existingReport, existingPlan].some((p) => existsSync(p) && JSON.parse(readFileSync(p, 'utf8')).rubricVersion !== RUBRIC_VERSION)) {
+        throw new Error('This output contains historical rubric results. Use a separate --out directory to preserve them.');
+      }
       const systems = list(opts.systems);
       const judges = list(opts.judges).map(parseJudge);
       const { loaded } = loadAll(resolve(opts.cases));
@@ -249,7 +258,7 @@ program
 
 function writeReport(results: PairResult[], loaded: LoadedCase[], artifactsDir: string, systems: string[], out: string, judges?: string[]): void {
   const planPath = join(out, 'judging.json');
-  if (judges) writeFileSync(planPath, JSON.stringify({ judges, cases: loaded.map((l) => l.case.id), systems }, null, 2) + '\n');
+  if (judges) writeFileSync(planPath, JSON.stringify({ rubricVersion: RUBRIC_VERSION, judges, cases: loaded.map((l) => l.case.id), systems }, null, 2) + '\n');
   else if (existsSync(planPath)) {
     const plan = JSON.parse(readFileSync(planPath, 'utf8')) as { judges: string[]; cases: string[]; systems: string[] };
     judges = plan.judges;
@@ -297,6 +306,19 @@ program
       console.log(`FAIL  ${file}\n  ${problems.join('\n  ')}`);
       process.exitCode = 1;
     } else console.log(`ok    ${file}`);
+  });
+
+program.command('audit-evidence')
+  .description('Audit saved drafts and prepare immutable copies for v3 rejudging; never calls a model or reruns historical checks')
+  .requiredOption('--artifacts <dir>', 'source artifacts directory')
+  .requiredOption('-o, --out <dir>', 'new audit directory (must be empty)')
+  .option('--cases <dir>', 'cases directory', 'cases')
+  .option('--split <split>', 'audit only this split', 'dev')
+  .option('--judgments <dir>', 'historical judgments to inventory without changing verdicts')
+  .option('--recovery-manifest <file>', 'explicit artifact/log hash and repository mappings')
+  .action((opts: { artifacts: string; out: string; cases: string; split: string; judgments?: string; recoveryManifest?: string }) => {
+    const audit = auditEvidence({ artifactsDir: opts.artifacts, outDir: opts.out, casesDir: opts.cases, split: opts.split, judgmentsDir: opts.judgments, recoveryManifest: opts.recoveryManifest });
+    console.log(`Audited ${audit.artifacts.length} ${audit.split} artifacts; ${audit.artifacts.filter((a) => a.coverage === 'unavailable').length} have unavailable fresh evidence. Report: ${join(resolve(opts.out), 'audit.md')}`);
   });
 
 program.parseAsync().catch((err: unknown) => {

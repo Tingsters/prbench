@@ -25,7 +25,12 @@ export function normalizeBody(body: string): string {
   text = text.replace(/<details>\s*<summary>\s*Comic transcript\s*<\/summary>[\s\S]*?<\/details>/gi, '');
   text = text
     .split('\n')
-    .filter((line) => !LINE_PATTERNS.some((p) => p.test(line)))
+    .map((line) => line.split(/(?<=[.!?])\s+(?=[A-Z`])/).filter((sentence) => {
+      // Mixed attribution/validation lines used to lose accurate check results.
+      // Keep substantive statements even when the attribution isn't separable.
+      if (/\b(?:tests?|checks?|validation|passed|failed|build|typecheck|lint|suite|errors?|dependencies|timeout)\b/i.test(sentence)) return true;
+      return !LINE_PATTERNS.some((p) => p.test(sentence));
+    }).join(' '))
     .join('\n');
   return text.replace(/\n{3,}/g, '\n\n').trim();
 }

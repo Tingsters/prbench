@@ -94,6 +94,11 @@ describe('Codex systems', () => {
     expect(native.artifact.meta).toMatchObject({ agent: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'medium', toolVersion: '9.8.7', inputTokens: 100, outputTokens: 20 });
     expect(native.artifact.meta.costUsd).toBeUndefined();
     expect(tool.artifact.meta).toMatchObject({ agent: 'codex', tool: 'tracetoon', toolVersion: '0.0.0-test' });
+    for (const a of [native.artifact, tool.artifact]) {
+      expect(a.validation?.commands).toEqual(expect.arrayContaining([expect.objectContaining({ command: 'bun test', exitCode: 0, output: expect.stringContaining('2 pass') })]));
+      expect(a.validation?.commands[0]?.before?.fingerprint).toHaveLength(64);
+    }
+    expect(JSON.parse(readFileSync(join(output, loaded.case.id, 'codex-native.json'), 'utf8')).validation.commands[0].output).toContain('2 pass');
     const mismatched = exec([process.execPath, join(ROOT, 'src', 'cli.ts'), 'run', '-s', 'codex-native', '--cases', CASES, '--model', 'gpt-6.1-terra', '--skip-existing', '-o', output], { cwd: ROOT, env: { ...process.env } });
     expect(mismatched.code).toBe(1); expect(mismatched.stderr).toContain('different model or reasoning');
   });
@@ -178,8 +183,8 @@ test('dev-only judging excludes held-out artifacts and saves the selected scope'
       meta: { tool: system, startedAt: '2026-01-01T00:00:00Z', durationMs: 1 },
     }));
   }
-  const side = { factualErrors: [], unsupportedClaims: [], claimsCovered: [], contextCovered: [], uncertaintiesRespected: [], trapsHit: [], rubric: Object.fromEntries(RUBRIC_KEYS.map((key) => [key, 1])), notes: '' };
-  env({ FAKE_CODEX_MODE: 'judge', FAKE_CODEX_JUDGMENT: JSON.stringify({ A: side, B: side, preferred: 'tie', reason: 'test' }) });
+  const side = { factualErrors: [], unsupportedClaims: [], claimAssessments: [], claimsCovered: [], contextCovered: [], uncertaintiesRespected: [], trapsHit: [], rubric: Object.fromEntries(RUBRIC_KEYS.map((key) => [key, 1])), notes: '' };
+  env({ FAKE_CODEX_MODE: 'judge', FAKE_CODEX_JUDGMENT: JSON.stringify({ A: side, B: side, preferred: 'tie', preferenceDependsOnMissingEvidence: false, reason: 'test' }) });
   const result = exec([process.execPath, join(ROOT, 'src', 'cli.ts'), 'judge', '--cases', dev.root, '--split', 'dev', '--systems', 'codex-native,codex-tracetoon', '--judges', 'codex:gpt-6.1-sol@medium', '--artifacts', artifacts, '-o', output], { cwd: ROOT, env: { ...process.env } });
   expect(result.code).toBe(0);
   const plan = JSON.parse(readFileSync(join(output, 'judging.json'), 'utf8'));

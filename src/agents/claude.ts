@@ -10,6 +10,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Sandbox } from '../run/sandbox.ts';
 import type { AgentRunResult } from './types.ts';
+import { startValidationCapture } from './validation.ts';
+import { runAgentProcess } from './process.ts';
 
 export const TOKEN_FILE = join(homedir(), '.prbench', 'claude-oauth-token');
 
@@ -59,6 +61,7 @@ function parseResult(stdout: string): Partial<ClaudeRunResult> {
   for (const line of lines) {
     try {
       const j = JSON.parse(line) as Record<string, any>;
+      if (j.type !== 'result') continue;
       const u = j.usage ?? {};
       return {
         result: typeof j.result === 'string' ? j.result : undefined,
@@ -84,7 +87,7 @@ export async function runClaude(sandbox: Sandbox, opts: ClaudeRunOptions): Promi
     ...claudeCommand(),
     '-p',
     '--output-format',
-    'json',
+    'stream-json', '--verbose',
     '--model',
     opts.model,
     '--permission-mode',
@@ -97,21 +100,13 @@ export async function runClaude(sandbox: Sandbox, opts: ClaudeRunOptions): Promi
   if (opts.maxBudgetUsd !== undefined) cmd.push('--max-budget-usd', String(opts.maxBudgetUsd));
   opts.log?.(`claude ${cmd.slice(claudeCommand().length).join(' ')}`);
 
-  const proc = Bun.spawn(cmd, {
+  const env = { ...sandbox.env, ...claudeAuthEnv(), ...opts.env };
+  const capture = startValidationCapture(sandbox, env);
+  const execution = await runAgentProcess(cmd, {
     cwd: sandbox.repo,
-    env: { ...sandbox.env, ...claudeAuthEnv(), ...opts.env },
-    stdin: new Blob([opts.prompt]),
-    stdout: 'pipe',
-    stderr: 'pipe',
+    env, prompt: opts.prompt, timeoutMs: opts.timeoutMs ?? 45 * 60_000, onLine: capture.line,
   });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    proc.kill();
-  }, opts.timeoutMs ?? 45 * 60_000);
-  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  const exitCode = await proc.exited;
-  clearTimeout(timer);
+  const { stdout, stderr, exitCode, timedOut } = execution;
   const parsed = parseResult(stdout);
   return {
     exitCode,
@@ -120,6 +115,7 @@ export async function runClaude(sandbox: Sandbox, opts: ClaudeRunOptions): Promi
     ...parsed,
     durationMs: Date.now() - started,
     stderr: stderr.slice(-4000),
+    validation: capture.finish(execution),
   };
 }
 

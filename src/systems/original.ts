@@ -4,6 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ARTIFACT_SCHEMA, type PRArtifact } from '../schema/artifact.ts';
+import { unavailableValidation } from '../schema/validation.ts';
 import { commitsBetween, diffBetween, resolveRef } from '../run/gitFacts.ts';
 import type { System } from './types.ts';
 
@@ -25,6 +26,7 @@ export const original: System = {
     const head = resolveRef(sandbox.repo, c.repo.head!);
     const artifact: PRArtifact = {
       schema: ARTIFACT_SCHEMA,
+      validation: unavailableValidation('Published baseline: no fresh writer was run. Assess historical validation claims against the original work sessions.'),
       case: c.id,
       system: 'original',
       title: o.title,

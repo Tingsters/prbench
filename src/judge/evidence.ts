@@ -141,7 +141,7 @@ export function sessionEvidence(loaded: LoadedCase, budget = 24_000): string {
   if (all.length === 0) return '(no recorded sessions)';
   const edits = [...new Set(all.filter((i) => i.kind === 'edit').map((i) => i.text))];
   const editLine = edits.length ? `Files edited in the sessions: ${edits.slice(0, 60).join(', ')}${edits.length > 60 ? ', …' : ''}` : '';
-  const timeline = all.filter((i) => i.kind !== 'edit').map((i, index) => ({ i, index, text: render(i) }));
+  const timeline = all.filter((i) => i.kind !== 'edit').map((i, index) => ({ i, index, text: `[S${index + 1}] ${render(i)}` }));
   let room = budget - editLine.length - 200;
   const keep = new Set<number>();
   for (const weight of [3, 2, 1]) {

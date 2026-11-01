@@ -6,7 +6,7 @@ import { FACTS_SCHEMA, loadCase, type Facts } from '../src/schema/case.ts';
 import { normalizeBody, wordCount } from '../src/judge/normalize.ts';
 import { combine, judgePair, judgmentPath, type StoredJudgment } from '../src/judge/pairwise.ts';
 import { extractJson, parseJudge, type JudgeProvider } from '../src/judge/providers.ts';
-import { buildPrompt, checkJudgment, JUDGMENT_SCHEMA, PREPARATION_NOTE, RUBRIC_KEYS, type Judgment, type SideJudgment } from '../src/judge/rubric.ts';
+import { buildPrompt, checkJudgment, JUDGMENT_SCHEMA, PREPARATION_NOTE, RUBRIC_KEYS, RUBRIC_VERSION, type Judgment, type SideJudgment } from '../src/judge/rubric.ts';
 import { sessionEvidence, sessionItems } from '../src/judge/evidence.ts';
 import { agreedResults, buildReport, reportMarkdown } from '../src/report.ts';
 import { bootstrapMeanCI, cohenKappa, signTest } from '../src/stats.ts';
@@ -27,6 +27,10 @@ const facts: Facts = {
 const side = (over: Partial<SideJudgment> = {}): SideJudgment => ({
   factualErrors: [],
   unsupportedClaims: [],
+  claimAssessments: [
+    ...(over.factualErrors ?? []).map((claim) => ({ claim, status: 'contradicted' as const, evidenceRefs: ['D'], reason: 'Fixture contradiction' })),
+    ...(over.unsupportedClaims ?? []).map((claim) => ({ claim, status: 'unsupported' as const, evidenceRefs: ['D'], reason: 'Fixture overclaim' })),
+  ],
   claimsCovered: [],
   contextCovered: [],
   uncertaintiesRespected: [],
@@ -88,13 +92,13 @@ describe('rubric', () => {
   });
 
   test('checkJudgment accepts a full judgment and names missing fields', () => {
-    const good: Judgment = { A: side(), B: side(), preferred: 'A', reason: 'r' };
+    const good: Judgment = { A: side(), B: side(), preferred: 'A', preferenceDependsOnMissingEvidence: false, reason: 'r' };
     expect(checkJudgment(good)).toEqual([]);
     const bad = JSON.parse(JSON.stringify(good));
     bad.preferred = 'C';
     delete bad.B.trapsHit;
     bad.A.rubric.scope = 3;
-    expect(checkJudgment(bad)).toEqual(['preferred: expected A, B or tie', 'A.rubric.scope: expected 0, 1, 2 or null', 'B.trapsHit: expected strings']);
+    expect(checkJudgment(bad)).toEqual(['preferred: expected A, B, tie or inconclusive', 'A.rubric.scope: expected 0, 1, 2 or null', 'B.trapsHit: expected strings']);
   });
 
   test('the schema requires every rubric item', () => {
@@ -124,7 +128,7 @@ describe('pairwise', () => {
     case: 'c',
     order: 'ab',
     labels,
-    judgment: { A: side(), B: side(), preferred, reason: '' },
+    judgment: { A: side(), B: side(), preferred, preferenceDependsOnMissingEvidence: preferred === 'inconclusive', reason: '' },
     at: '',
   });
 
@@ -152,6 +156,7 @@ describe('pairwise', () => {
           A: side({ claimsCovered: a.includes('blank') ? ['C1', 'C2'] : ['C1'] }),
           B: side({ claimsCovered: a.includes('blank') ? ['C1'] : ['C1', 'C2'] }),
           preferred,
+          preferenceDependsOnMissingEvidence: false,
           reason: 'mentions blank names',
         };
         return { text: '```json\n' + JSON.stringify(j) + '\n```', costUsd: 0.01 };
@@ -226,6 +231,7 @@ describe('budget', () => {
 describe('report by model', () => {
   test('breaks head-to-head results down by agent model when cases used more than one', () => {
     const r = (c: string, model: string, verdict: string) => ({
+      rubricVersion: RUBRIC_VERSION,
       case: c,
       split: 'dev',
       judge: 'claude:opus',
@@ -254,7 +260,7 @@ describe('report by model', () => {
     const judge: JudgeProvider = {
       id: 'fake:2',
       family: 'test',
-      ask: async () => ({ text: JSON.stringify({ A: side(), B: side(), preferred: 'tie', reason: '' }) }),
+      ask: async () => ({ text: JSON.stringify({ A: side(), B: side(), preferred: 'tie', preferenceDependsOnMissingEvidence: false, reason: '' }) }),
     };
     const x = { ...artifact('tracetoon', 'x'), meta: { ...artifact('tracetoon', 'x').meta, model: 'opus' } };
     const y = { ...artifact('claude-native', 'y'), meta: { ...artifact('claude-native', 'y').meta, model: 'sonnet' } };
@@ -266,6 +272,7 @@ describe('report by model', () => {
 
 describe('report', () => {
   const pr = (c: string, split: string, judge: string, verdict: string, flipped = false) => ({
+    rubricVersion: RUBRIC_VERSION,
     case: c,
     split,
     judge,
@@ -314,7 +321,7 @@ describe('report', () => {
     const md = reportMarkdown(report);
     expect(md).toContain('## dev split (2 cases)');
     expect(md).toContain('## test split (1 case)');
-    expect(md).toContain('| tracetoon vs claude-native | claude:opus | 2 | 0 | 0 | 0 | 100% | 0.50 |');
+    expect(md).toContain('| tracetoon vs claude-native | claude:opus | 2 | 0 | 0 | 0 | 0 | 100% | 0.50 |');
     expect(md).toContain('67% of 3 pair verdicts agree');
   });
 
@@ -370,6 +377,7 @@ describe('report', () => {
     // No artifacts yet: no provider is called, but the selected scope is recorded.
     expect(cli('judge', '--cases', root, '--case', 'selected', '--systems', 'original,claude-native', '--judges', 'codex', '--out', out, '--artifacts', artifacts).code).toBe(0);
     expect(JSON.parse(readFileSync(join(out, 'judging.json'), 'utf8'))).toEqual({
+      rubricVersion: RUBRIC_VERSION,
       judges: ['codex:default'], cases: ['selected'], systems: ['original', 'claude-native'],
     });
     for (const c of ['selected', 'other']) {
@@ -416,6 +424,6 @@ describe('session evidence', () => {
     const p = buildPrompt({ caseTitle: 'T', facts, commits: [], diff: '', evidence: '[10:00] $ bun test', a: { title: 'a', body: 'a' }, b: { title: 'b', body: 'b' } });
     expect(p).toContain('<<<SESSIONS\n[10:00] $ bun test\nSESSIONS>>>');
     expect(p).toContain(PREPARATION_NOTE);
-    expect(p).toContain('A statement the session evidence supports is supported.');
+    expect(p).toContain('Absence never establishes fabrication and never proves a pass.');
   });
 });

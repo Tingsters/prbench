@@ -64,6 +64,16 @@ The `@effort` judge syntax uses the dedicated cache, an isolated home and explic
 
 ## How it fits together
 
+Rubric v3 supplies original work-session evidence and each writer's fresh command evidence separately. Missing check receipts are reported as evidence gaps; contradictions and scope overclaims have separate findings. Evidence-dependent preferences are inconclusive, and reports show evidence coverage. Legacy v2 unsupported counts may include missing fresh evidence and must not be interpreted as fabrication rates. See [validation evidence and historical audits](docs/validation-evidence.md).
+
+To prepare existing development drafts for reassessment while preserving their originals:
+
+```sh
+bun run prbench audit-evidence --cases cases-local --split dev --artifacts results-old/artifacts --judgments results-old/judgments --out results-evidence-audit
+```
+
+This local audit calls no models and never reruns historical checks. Use a new output directory when judging under v3; historical reports and caches are preserved.
+
 - A **case** (`cases/<id>/`) fixes the starting point: a repo snapshot, the task and, for replay cases, the recorded agent sessions and resulting commits. [docs/cases.md](docs/cases.md)
 - A **system** (`src/systems/`) turns a case into a **PR artifact** (`src/schema/artifact.ts`). Systems run in a **sandbox** (`src/run/sandbox.ts`) with their own home directory holding only the case's sessions, a fake `gh` that captures PRs, and a local remote for pushes.
 - **Metrics** only see artifacts, so any PR tool can be compared with any other. [docs/methodology.md](docs/methodology.md)

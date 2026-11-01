@@ -105,6 +105,7 @@ export function agentArtifact(opts: {
     head,
     commits: commitsBetween(sandbox.repo, base, head),
     diff: diffBetween(sandbox.repo, base, head),
+    ...(opts.run.validation ? { validation: opts.run.validation } : {}),
     meta: {
       tool: opts.tool,
       ...(opts.toolVersion ? { toolVersion: opts.toolVersion } : {}),

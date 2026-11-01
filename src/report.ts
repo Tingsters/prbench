@@ -1,10 +1,10 @@
 // Turns pairwise results into report.json and report.md. Dev and test splits
 // are always reported separately; there is no blended score.
-import type { PRArtifact } from './schema/artifact.ts';
+import { artifactDigest, type PRArtifact } from './schema/artifact.ts';
 import type { Facts } from './schema/case.ts';
 import { normalizeBody, wordCount } from './judge/normalize.ts';
 import type { PairResult } from './judge/pairwise.ts';
-import { RUBRIC_KEYS, RUBRIC_VERSION, type SideJudgment } from './judge/rubric.ts';
+import { checkJudgment, RUBRIC_KEYS, RUBRIC_VERSION, type SideJudgment } from './judge/rubric.ts';
 import { bootstrapMeanCI, cohenKappa, mean, signTest } from './stats.ts';
 
 export interface PairSummary {
@@ -15,6 +15,7 @@ export interface PairSummary {
   xWins: number;
   yWins: number;
   ties: number;
+  inconclusive: number;
   flips: number;
   /** x wins / (x wins + y wins). */
   winRate: number;
@@ -29,6 +30,8 @@ export interface SystemSummary {
   judgments: number;
   factualErrors: number;
   unsupportedClaims: number;
+  evidenceGaps: number;
+  validationEvidence: { artifacts: number; recorded: number; partial: number; unavailable: number };
   claimCoverage: number;
   contextCoverage: number;
   uncertaintiesRespected: number;
@@ -65,7 +68,8 @@ function summarizePairs(results: PairResult[], judge: string): PairSummary[] {
     const { x, y } = rs[0]!;
     const xWins = rs.filter((r) => r.verdict === x).length;
     const yWins = rs.filter((r) => r.verdict === y).length;
-    const diffs = rs.map((r) => (r.verdict === x ? 1 : r.verdict === y ? -1 : 0));
+    const inconclusive = rs.filter((r) => r.verdict === 'inconclusive').length;
+    const diffs = rs.filter((r) => r.verdict !== 'inconclusive').map((r) => (r.verdict === x ? 1 : r.verdict === y ? -1 : 0));
     return {
       x,
       y,
@@ -73,10 +77,11 @@ function summarizePairs(results: PairResult[], judge: string): PairSummary[] {
       n: rs.length,
       xWins,
       yWins,
-      ties: rs.length - xWins - yWins,
+      ties: rs.length - xWins - yWins - inconclusive,
+      inconclusive,
       flips: rs.filter((r) => r.flipped).length,
       winRate: xWins + yWins ? xWins / (xWins + yWins) : NaN,
-      signP: signTest(xWins, yWins),
+      signP: diffs.length ? signTest(xWins, yWins) : NaN,
       meanDiff: mean(diffs),
       ci: bootstrapMeanCI(diffs),
     };
@@ -95,7 +100,7 @@ export function agreedResults(results: PairResult[], judges = [...new Set(result
     return {
       ...rs[0]!,
       judge: AGREE,
-      verdict: verdicts.size === 1 ? rs[0]!.verdict : 'tie',
+      verdict: verdicts.has('inconclusive') ? 'inconclusive' : verdicts.size === 1 ? rs[0]!.verdict : 'tie',
       flipped: rs.some((r) => r.flipped),
     };
   });
@@ -107,6 +112,7 @@ function summarizeSystems(
   facts: Map<string, Facts>,
 ): SystemSummary[] {
   const sides = new Map<string, { side: SideJudgment; facts: Facts }[]>();
+  for (const bySystem of artifacts.values()) for (const system of bySystem.keys()) if (!sides.has(system)) sides.set(system, []);
   for (const r of results) {
     const f = facts.get(r.case)!;
     for (const [system, list] of Object.entries(r.sides)) {
@@ -118,9 +124,12 @@ function summarizeSystems(
     const words: number[] = [];
     let cost = 0;
     let costed = false;
+    const validationEvidence = { artifacts: 0, recorded: 0, partial: 0, unavailable: 0 };
     for (const [, bySystem] of artifacts) {
       const a = bySystem.get(system);
       if (!a) continue;
+      validationEvidence.artifacts++;
+      validationEvidence[a.validation?.coverage ?? 'unavailable']++;
       words.push(wordCount(normalizeBody(a.body)));
       if (a.meta.costUsd !== undefined) {
         cost += a.meta.costUsd;
@@ -138,6 +147,8 @@ function summarizeSystems(
       judgments: list.length,
       factualErrors: mean(list.map((l) => l.side.factualErrors.length)),
       unsupportedClaims: mean(list.map((l) => l.side.unsupportedClaims.length)),
+      evidenceGaps: mean(list.map((l) => l.side.claimAssessments.filter((a) => a.status === 'unverifiable').length)),
+      validationEvidence,
       claimCoverage: mean(list.map((l) => frac(new Set(l.side.claimsCovered).size, l.facts.claims.length))),
       contextCoverage: mean(list.map((l) => frac(new Set(l.side.contextCovered).size, l.facts.context.length)).filter((x) => !Number.isNaN(x))),
       uncertaintiesRespected: mean(
@@ -159,8 +170,19 @@ export function buildReport(opts: {
   splitOf: Map<string, string>;
 }): Report {
   const { results } = opts;
+  if (results.some((r) => r.rubricVersion !== RUBRIC_VERSION)) {
+    throw new Error(`Cannot combine legacy or mixed rubric results in a v${RUBRIC_VERSION} report. Preserve historical reports; audit evidence and rejudge into a separate output directory.`);
+  }
+  for (const r of results) if (r.artifactDigests) for (const system of [r.x, r.y]) {
+    const artifact = opts.artifacts.get(r.case)?.get(system);
+    if (!artifact || r.artifactDigests[system] !== artifactDigest(artifact)) throw new Error(`Artifact/evidence changed or missing for ${r.case}/${system}; rejudge the preserved draft before rebuilding its report.`);
+  }
+  for (const r of results) for (const list of Object.values(r.sides)) for (const s of list) {
+    const problems = checkJudgment({ A: s, B: s, preferred: 'tie', preferenceDependsOnMissingEvidence: false, reason: '' });
+    if (problems.length) throw new Error(`Invalid v${RUBRIC_VERSION} side judgment for ${r.case}: ${problems.join('; ')}`);
+  }
   const judges = [...new Set(opts.judges ?? results.map((r) => r.judge))].sort();
-  const systems = [...new Set(results.flatMap((r) => [r.x, r.y]))].sort();
+  const systems = [...new Set([...results.flatMap((r) => [r.x, r.y]), ...[...opts.artifacts.values()].flatMap((a) => [...a.keys()])])].sort();
   const expected = new Map<string, { case: string; split: string; x: string; y: string; judge: string }>();
   const key = (c: string, x: string, y: string, j: string) => JSON.stringify([c, ...[x, y].sort(), j]);
   const addPair = (c: string, split: string, x: string, y: string) => {
@@ -178,8 +200,8 @@ export function buildReport(opts: {
   const splits: Report['splits'] = {};
   for (const split of [...new Set(opts.splitOf.values())].sort()) {
     const rs = results.filter((r) => r.split === split);
-    if (rs.length === 0) continue;
-    const cases = [...new Set(rs.map((r) => r.case))].sort();
+    const cases = [...new Set([...rs.map((r) => r.case), ...[...opts.artifacts.keys()].filter((c) => opts.splitOf.get(c) === split)])].sort();
+    if (!cases.length) continue;
     const arts = new Map([...opts.artifacts].filter(([c]) => cases.includes(c)));
     const pairs = judges.flatMap((j) => summarizePairs(rs.filter((r) => r.judge === j), j));
     if (judges.length > 1) pairs.push(...summarizePairs(agreedResults(rs, judges), AGREE));
@@ -202,7 +224,7 @@ export function buildReport(opts: {
       const b: string[] = [];
       for (const r of results.filter((r) => r.judge === judges[i])) {
         const other = results.find((o) => o.judge === judges[j] && o.case === r.case && o.x === r.x && o.y === r.y);
-        if (!other) continue;
+        if (!other || r.verdict === 'inconclusive' || other.verdict === 'inconclusive') continue;
         a.push(r.verdict);
         b.push(other.verdict);
       }
@@ -222,7 +244,10 @@ export function buildReport(opts: {
     coverage: { expected: expected.size, completed: [...expected.keys()].filter((k) => completed.has(k)).length, missing },
     splits,
     judgeAgreement,
-    warnings: [...new Set(results.flatMap((r) => r.warnings.map((w) => `${r.case}: ${w}`)))],
+    warnings: [...new Set(results.flatMap((r) => [
+      ...r.warnings.map((w) => `${r.case}: ${w}`),
+      ...(!r.artifactDigests ? [`${r.case}: imported result has no artifact digests; correspondence to current drafts/evidence is unverified`] : []),
+    ]))],
   };
 }
 
@@ -232,6 +257,7 @@ const pct = (x: number) => (Number.isNaN(x) ? '–' : `${Math.round(x * 100)}%`)
 export function reportMarkdown(r: Report): string {
   const out: string[] = ['# prbench report', ''];
   out.push(`Rubric v${r.rubricVersion}. Judges: ${r.judges.join(', ')}. Generated ${r.generatedAt}.`, '');
+  out.push('Evidence gaps are unverified claims, not errors or fabrication. Fresh evidence coverage is reported per artifact; partial capture may still establish individual results. Inconclusive preferences are excluded from win/tie statistics, intervals and judge agreement.', '');
   out.push(`Completed ${r.coverage.completed} of ${r.coverage.expected} expected case/pair/judge results (each requires both orders).`, '');
   if (r.coverage.missing.length) {
     out.push('## Missing judgments', '', 'These results are unavailable, not ties. Incomplete pairs are excluded from "all judges agree".', '');
@@ -239,34 +265,36 @@ export function reportMarkdown(r: Report): string {
     out.push('');
   }
   out.push(
-    'Each pair is judged in both orders; a win needs both orders to agree, otherwise it is a tie (a *flip* when the orders picked opposite systems). ' +
+    'Each pair is judged in both orders; a win needs both orders to agree. An evidence-dependent abstention in either order makes the pair inconclusive; other disagreements are ties (a *flip* when the orders picked opposite systems). ' +
       `"${AGREE}" includes only pairs completed by every configured judge, and counts a win only when every judge gave it. With few cases, treat p-values and intervals as a sense of scale, not proof.`,
     '',
   );
   for (const [split, s] of Object.entries(r.splits)) {
     out.push(`## ${split} split (${s.cases.length} case${s.cases.length === 1 ? '' : 's'})`, '', s.cases.join(', '), '');
     out.push('### Head to head', '');
-    out.push('| x vs y | judge | x wins | y wins | ties | flips | x win rate | sign test p | mean (x−y) [95% CI] |');
-    out.push('|---|---|---|---|---|---|---|---|---|');
+    out.push('| x vs y | judge | x wins | y wins | ties | flips | inconclusive | x win rate | sign test p | mean (x−y) [95% CI] |');
+    out.push('|---|---|---|---|---|---|---|---|---|---|');
     for (const p of s.pairs) {
       out.push(
-        `| ${p.x} vs ${p.y} | ${p.judge} | ${p.xWins} | ${p.yWins} | ${p.ties} | ${p.flips} | ${pct(p.winRate)} | ${f2(p.signP)} | ${f2(p.meanDiff)} [${f2(p.ci[0])}, ${f2(p.ci[1])}] |`,
+        `| ${p.x} vs ${p.y} | ${p.judge} | ${p.xWins} | ${p.yWins} | ${p.ties} | ${p.flips} | ${p.inconclusive} | ${pct(p.winRate)} | ${f2(p.signP)} | ${f2(p.meanDiff)} [${f2(p.ci[0])}, ${f2(p.ci[1])}] |`,
       );
     }
     if (s.byModel.length) {
       out.push('', '### Head to head by agent model', '');
-      out.push('| model | x vs y | judge | x wins | y wins | ties | flips |');
-      out.push('|---|---|---|---|---|---|---|');
-      for (const p of s.byModel) out.push(`| ${p.model} | ${p.x} vs ${p.y} | ${p.judge} | ${p.xWins} | ${p.yWins} | ${p.ties} | ${p.flips} |`);
+      out.push('| model | x vs y | judge | x wins | y wins | ties | flips | inconclusive |');
+      out.push('|---|---|---|---|---|---|---|---|---|');
+      for (const p of s.byModel) out.push(`| ${p.model} | ${p.x} vs ${p.y} | ${p.judge} | ${p.xWins} | ${p.yWins} | ${p.ties} | ${p.flips} | ${p.inconclusive} |`);
     }
     out.push('', '### Per system (means over every judgment of that system)', '');
-    out.push('| system | judgments | factual errors | unsupported claims | claims covered | context covered | uncertainties respected | traps hit | median words | total agent cost |');
-    out.push('|---|---|---|---|---|---|---|---|---|---|');
+    out.push('| system | judgments | factual errors | unsupported overclaims | evidence gaps | claims covered | context covered | uncertainties respected | traps hit | median words | total agent cost |');
+    out.push('|---|---|---|---|---|---|---|---|---|---|---|');
     for (const x of s.systems) {
       out.push(
-        `| ${x.system} | ${x.judgments} | ${f2(x.factualErrors)} | ${f2(x.unsupportedClaims)} | ${pct(x.claimCoverage)} | ${pct(x.contextCoverage)} | ${pct(x.uncertaintiesRespected)} | ${f2(x.trapsHit)} | ${Number.isNaN(x.medianWords) ? '–' : x.medianWords} | ${x.costUsd === undefined ? '–' : `$${x.costUsd.toFixed(2)}`} |`,
+        `| ${x.system} | ${x.judgments} | ${f2(x.factualErrors)} | ${f2(x.unsupportedClaims)} | ${f2(x.evidenceGaps)} | ${pct(x.claimCoverage)} | ${pct(x.contextCoverage)} | ${pct(x.uncertaintiesRespected)} | ${f2(x.trapsHit)} | ${Number.isNaN(x.medianWords) ? '–' : x.medianWords} | ${x.costUsd === undefined ? '–' : `$${x.costUsd.toFixed(2)}`} |`,
       );
     }
+    out.push('', '### Fresh writer evidence coverage (artifact counts)', '', '| system | artifacts | recorded | partial | unavailable |', '|---|---|---|---|---|');
+    for (const x of s.systems) { const e = x.validationEvidence; out.push(`| ${x.system} | ${e.artifacts} | ${e.recorded} | ${e.partial} | ${e.unavailable} |`); }
     out.push('', '### Rubric (mean of 0–2 scores; n/a items excluded)', '');
     out.push(`| system | ${RUBRIC_KEYS.join(' | ')} |`);
     out.push(`|---|${RUBRIC_KEYS.map(() => '---').join('|')}|`);
