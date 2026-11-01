@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadCase } from '../src/schema/case.ts';
-import { claudeProjectDir, createSandbox, pathPairs, rewritePaths } from '../src/run/sandbox.ts';
+import { claudeProjectDir, createSandbox, msysPath, pathPairs, rewritePaths } from '../src/run/sandbox.ts';
 import { exec, git } from '../src/util/exec.ts';
 import { cleanupTemps, EXAMPLE, tempDir } from './helpers.ts';
 
@@ -24,6 +24,17 @@ describe('rewritePaths', () => {
       file: `${to}\\a.ts`,
       alt: 'D:/tmp/sb/repo/b.ts',
     });
+  });
+
+  test('rewrites the Git Bash spelling of a Windows path too', () => {
+    const line = JSON.stringify({ cwd: '/c/Users/ada/repo', cmd: 'cd /c/Users/ada/repo/src && ls', other: '/c/Users/ada/repository' });
+    expect(JSON.parse(rewritePaths(line, [['C:\\Users\\ada\\repo', 'D:\\tmp\\sb\\repo']]))).toEqual({
+      cwd: '/d/tmp/sb/repo',
+      cmd: 'cd /d/tmp/sb/repo/src && ls',
+      other: '/c/Users/ada/repository',
+    });
+    expect(msysPath('C:\\Users\\ada')).toBe('/c/Users/ada');
+    expect(msysPath('/home/ada')).toBeUndefined();
   });
 
   test('rewrites whole paths only', () => {

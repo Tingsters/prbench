@@ -60,6 +60,9 @@ const { scan } = (await import(join(tracetoon, 'src', 'pipeline.ts'))) as {
   };
 };
 
+/** Largest first record a slice may start with (well under readers' 128 KB head window). */
+const HEAD_LIMIT = 64 * 1024;
+
 const commitTime = (repo: string, ref: string) => Number(git(['show', '-s', '--format=%ct', ref], repo)) * 1000;
 
 /** Keeps lines timestamped inside [from, to]; Codex's session_meta line is always kept. */
@@ -77,6 +80,11 @@ function slice(text: string, from: number, to: number): { text: string; kept: nu
     const isMeta = j.type === 'session_meta';
     const t = Date.parse(j.timestamp ?? '');
     if (!isMeta && !(t >= from && t <= to)) continue;
+    // Readers find a session's working directory in the first records of the
+    // file, reading only its first 128 KB (Showtail's agent-traces). A slice
+    // that starts mid-session can open with one huge record, which hides the
+    // whole file, so start at the first small record that names its cwd.
+    if (kept.length === 0 && !isMeta && (line.length > HEAD_LIMIT || !(j.cwd ?? j.payload?.cwd))) continue;
     cwd ??= j.cwd ?? j.payload?.cwd;
     kept.push(line);
   }

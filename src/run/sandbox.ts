@@ -77,9 +77,16 @@ export function claudeProjectDir(path: string): string {
   return path.replace(/[^A-Za-z0-9]/g, '-');
 }
 
+/** "C:\x\y" -> "/c/x/y", the spelling Git Bash (MSYS) uses; undefined for non-drive paths. */
+export function msysPath(path: string): string | undefined {
+  const m = /^([A-Za-z]):[\\/](.*)$/.exec(path);
+  return m ? `/${m[1]!.toLowerCase()}/${m[2]!.replace(/\\/g, '/')}` : undefined;
+}
+
 /**
- * Rewrites recorded paths wherever they appear inside JSON strings, in both
- * native and forward-slash spelling. Longer paths win, and each occurrence is
+ * Rewrites recorded paths wherever they appear inside JSON strings, in each
+ * spelling a Windows path takes in agent logs: native (C:\x), forward-slash
+ * (C:/x) and Git Bash (/c/x). Longer paths win, and each occurrence is
  * rewritten once, so a repository path and its parent can both be mapped.
  */
 export function rewritePaths(jsonl: string, pairs: [from: string, to: string][]): string {
@@ -89,6 +96,8 @@ export function rewritePaths(jsonl: string, pairs: [from: string, to: string][])
     map.set(esc(from), esc(to));
     const fwd = from.replace(/\\/g, '/');
     if (fwd !== from) map.set(esc(fwd), esc(to.replace(/\\/g, '/')));
+    const msys = msysPath(from);
+    if (msys) map.set(esc(msys), esc(msysPath(to) ?? to.replace(/\\/g, '/')));
   }
   const keys = [...map.keys()].sort((a, b) => b.length - a.length);
   if (keys.length === 0) return jsonl;
