@@ -19,7 +19,7 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { basename, delimiter, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, posix, resolve, win32 } from 'node:path';
 import type { Case, CaseSession, LoadedCase } from '../schema/case.ts';
 import { git } from '../util/exec.ts';
 
@@ -120,7 +120,8 @@ export function pathPairs(c: Case, repo: string): [string, string][] {
   if (!rec) return [];
   const pairs: [string, string][] = [[rec, repo]];
   const parent = rec.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]+$/, '');
-  if (parent && parent !== rec && !/^[A-Za-z]:$|^$/.test(parent)) pairs.push([parent, dirname(repo)]);
+  const repoParent = /^(?:[A-Za-z]:[\\/]|\\\\)/.test(repo) ? win32.dirname(repo) : posix.dirname(repo);
+  if (parent && parent !== rec && !/^[A-Za-z]:$|^$/.test(parent)) pairs.push([parent, repoParent]);
   return pairs;
 }
 

@@ -84,6 +84,15 @@ describe('rewritePaths', () => {
     expect(pathPairs({ repo: {}, sessions: [{ cwd: '/repo' }] } as never, '/sb/work/repo')).toEqual([['/repo', '/sb/work/repo']]);
   });
 
+  test('maps a Windows recording onto a POSIX sandbox and its parent', () => {
+    const pairs = pathPairs({ repo: { recordedPath: 'C:\\dev\\tool' } } as never, '/sb/work/tool');
+    expect(pairs).toEqual([
+      ['C:\\dev\\tool', '/sb/work/tool'],
+      ['C:\\dev', '/sb/work'],
+    ]);
+    expect(JSON.parse(rewritePaths(JSON.stringify({ cwd: 'C:\\dev\\tool', parent: 'C:\\dev' }), pairs))).toEqual({ cwd: '/sb/work/tool', parent: '/sb/work' });
+  });
+
   test('claudeProjectDir matches Claude Code naming', () => {
     expect(claudeProjectDir('C:\\Users\\cassandra\\Development\\tracetoon')).toBe('C--Users-cassandra-Development-tracetoon');
     expect(claudeProjectDir('/home/ada/my.repo')).toBe('-home-ada-my-repo');
@@ -128,7 +137,10 @@ describe('createSandbox', () => {
       expect(sb.sessions).toEqual([join(sb.home, '.claude', 'projects', claudeProjectDir(sb.repo), 'session.jsonl')]);
       const lines = readFileSync(sb.sessions[0]!, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
       expect(lines.every((l) => l.cwd === sb.repo)).toBe(true);
-      expect(readFileSync(sb.sessions[0]!, 'utf8')).not.toContain('/work/greet');
+      const files = lines.flatMap((l) => Array.isArray(l.message?.content) ? l.message.content : [])
+        .filter((part) => part.type === 'tool_use' && part.input?.file_path)
+        .map((part) => part.input.file_path.replace(/\\/g, '/'));
+      expect(files).toEqual(['greet.js', 'greet.js', 'greet.test.js'].map((name) => join(sb.repo, name).replace(/\\/g, '/')));
       expect(sb.env.HOME).toBe(sb.home);
       expect(sb.env.USERPROFILE).toBe(sb.home);
       expect(sb.env.CODEX_HOME).toBe(sb.codexHome);
