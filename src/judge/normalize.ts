@@ -7,6 +7,8 @@ const LINE_PATTERNS: RegExp[] = [
   /^\s*🤖\s*Generated with \[?Claude Code\]?.*$/i,
   /^\s*Generated with \[Claude Code\]\(.*\)\s*$/i,
   /^\s*(?:🤖\s*)?Generated with \[?Codex\]?.*$/i,
+  /^\s*(?:This\s+)?(?:PR\s+)?description\s+(?:was\s+)?(?:prepared|drafted|written|generated)\b.*(?:\b(?:AI|Codex|Claude|Tracetoon)\b|\bsession logs\b).*$/i,
+  /^\s*No human (?:author )?review (?:was|has been) (?:captured|recorded|claimed)[.!]?\s*$/i,
   /^\s*Co-Authored-By:.*$/i,
   /^\s*Assisted-by:.*$/i,
 ];

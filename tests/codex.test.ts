@@ -113,6 +113,14 @@ test('Codex attribution is removed without stripping the substantive description
   expect(normalizeBody('Codex integration uses OAuth.\n\n🤖 Generated with [Codex](https://example.invalid)')).toBe('Codex integration uses OAuth.');
 });
 
+test('prose AI-review disclosures cannot reveal the system to a blind judge', () => {
+  const content = 'Tracetoon adds an independent PR review stage.';
+  for (const disclosure of [
+    'Description prepared from session logs with Tracetoon and independently reviewed by AI agents. No human review was captured.',
+    'This description was prepared with AI from session logs and independently reviewed by an AI agent.\nNo human author review was captured.',
+  ]) expect(normalizeBody(`${content}\n\n${disclosure}`)).toBe(content);
+});
+
 test('an exited agent does not wait for a background child to close inherited pipes', async () => {
   const script = join(tempDir(), 'background.ts');
   writeFileSync(script, 'Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 6000)"], { stdout: "inherit", stderr: "inherit" }); console.log("finished"); process.exit(0);');
