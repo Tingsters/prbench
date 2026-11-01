@@ -2,7 +2,7 @@ import { ARTIFACT_SCHEMA, type PRArtifact } from '../schema/artifact.ts';
 import type { LoadedCase } from '../schema/case.ts';
 import { commitsBetween, diffBetween, resolveRef } from '../run/gitFacts.ts';
 import type { Sandbox } from '../run/sandbox.ts';
-import type { ClaudeRunResult } from '../agents/claude.ts';
+import type { AgentRunResult } from '../agents/types.ts';
 import { exec } from '../util/exec.ts';
 
 /**
@@ -39,6 +39,7 @@ export interface AgentOptions {
   /** Spending cap per run; undefined means no cap. */
   maxBudgetUsd?: number;
   timeoutMs: number;
+  reasoningEffort?: string;
 }
 
 /** "none" (or "0") means no cap; anything else must be a positive number of dollars. */
@@ -65,7 +66,7 @@ export function replaySupport(loaded: LoadedCase): { supported: true } | { suppo
 
 export function claudeVersion(env: Record<string, string>, command: string[]): string | undefined {
   const r = exec([...command, '--version'], { env });
-  return r.code === 0 ? r.stdout.trim().split(/\s+/)[0] : undefined;
+  return r.code === 0 ? r.stdout.match(/\d+\.\d+\.\d+(?:[-+][\w.-]+)?/)?.[0] : undefined;
 }
 
 /**
@@ -81,7 +82,9 @@ export function agentArtifact(opts: {
   model: string;
   title: string;
   body: string;
-  run: ClaudeRunResult;
+  run: AgentRunResult;
+  agent?: string;
+  reasoningEffort?: string;
   startedAt: number;
   notes?: string[];
 }): PRArtifact {
@@ -105,8 +108,9 @@ export function agentArtifact(opts: {
     meta: {
       tool: opts.tool,
       ...(opts.toolVersion ? { toolVersion: opts.toolVersion } : {}),
-      agent: 'claude-code',
+      agent: opts.agent ?? 'claude-code',
       model: opts.model,
+      ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
       startedAt: new Date(opts.startedAt).toISOString(),
       durationMs: Date.now() - opts.startedAt,
       ...(opts.run.costUsd !== undefined ? { costUsd: opts.run.costUsd } : {}),

@@ -16,6 +16,7 @@ export interface ArtifactMeta {
   toolVersion?: string;
   agent?: string;
   model?: string;
+  reasoningEffort?: string;
   startedAt: string;
   durationMs: number;
   costUsd?: number;
@@ -66,6 +67,7 @@ export function checkArtifact(value: unknown): Problems {
     c.string(m.toolVersion, 'meta.toolVersion', { optional: true });
     c.string(m.agent, 'meta.agent', { optional: true });
     c.string(m.model, 'meta.model', { optional: true });
+    c.string(m.reasoningEffort, 'meta.reasoningEffort', { optional: true });
     if (c.string(m.startedAt, 'meta.startedAt') && Number.isNaN(Date.parse(m.startedAt as string))) {
       c.fail('meta.startedAt', 'expected an ISO timestamp');
     }

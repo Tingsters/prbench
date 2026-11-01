@@ -10,6 +10,8 @@ import { DEFAULT_AGENT_OPTIONS, parseBudget } from './systems/agentShared.ts';
 import { judgePair, type PairResult } from './judge/pairwise.ts';
 import { parseJudge } from './judge/providers.ts';
 import { buildReport, reportMarkdown } from './report.ts';
+import { codexLogin } from './agents/codexAuth.ts';
+import { DEFAULT_CODEX_OPTIONS } from './systems/codex.ts';
 
 const program = new Command('prbench').description(
   'Evaluate tools that write or change the pull requests AI coding agents produce.',
@@ -30,6 +32,16 @@ function loadAll(root: string): { loaded: LoadedCase[]; errors: CaseError[] } {
 }
 
 const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
+
+program.command('auth')
+  .description('Sign in to the separate Codex benchmark login cache')
+  .argument('<agent>', 'codex')
+  .option('--status', 'show the benchmark login status')
+  .option('--device-auth', 'use device-code login instead of browser callback')
+  .action((agent: string, opts: { status?: boolean; deviceAuth?: boolean }) => {
+    if (agent !== 'codex') throw new Error('Only Codex uses this login command; Claude uses its existing token setup.');
+    process.exitCode = codexLogin(opts.status, opts.deviceAuth);
+  });
 
 /** Runs `tasks` with at most `limit` in flight, reporting failures instead of stopping. */
 async function pool<T>(limit: number, tasks: (() => Promise<T>)[]): Promise<{ ok: T[]; failed: string[] }> {
@@ -95,8 +107,9 @@ program
   .option('--split <split>', 'only cases in this split (dev or test)')
   .option('--cases <dir>', 'cases directory', 'cases')
   .option('-o, --out <dir>', 'output directory', 'results/artifacts')
-  .option('--model <model>', 'model for agent systems', DEFAULT_AGENT_OPTIONS.model)
-  .option('--max-budget-usd <n>', 'spending cap per agent run, or "none"', String(DEFAULT_AGENT_OPTIONS.maxBudgetUsd ?? 'none'))
+  .option('--model <model>', 'model (Claude: opus; Codex: gpt-6.1-sol)')
+  .option('--reasoning-effort <effort>', 'Codex reasoning effort (default: medium)')
+  .option('--max-budget-usd <n>', 'spending cap (Claude: 25; Codex: none)')
   .option('--timeout-min <n>', 'time limit per agent run, in minutes', String(DEFAULT_AGENT_OPTIONS.timeoutMs / 60_000))
   .option('--skip-existing', 'skip cases that already have an artifact for this system')
   .option('--keep-sandbox', 'leave sandboxes on disk for inspection')
@@ -107,15 +120,18 @@ program
       split?: string;
       cases: string;
       out: string;
-      model: string;
-      maxBudgetUsd: string;
+      model?: string;
+      reasoningEffort?: string;
+      maxBudgetUsd?: string;
       timeoutMin: string;
       skipExisting?: boolean;
       keepSandbox?: boolean;
     }) => {
+      const defaults = opts.system.startsWith('codex-') ? DEFAULT_CODEX_OPTIONS : DEFAULT_AGENT_OPTIONS;
       const system = findSystem(opts.system, {
-        model: opts.model,
-        maxBudgetUsd: parseBudget(opts.maxBudgetUsd),
+        model: opts.model ?? defaults.model,
+        ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+        maxBudgetUsd: opts.maxBudgetUsd === undefined ? defaults.maxBudgetUsd : parseBudget(opts.maxBudgetUsd),
         timeoutMs: Number(opts.timeoutMin) * 60_000,
       });
       const { loaded, errors } = loadAll(resolve(opts.cases));
@@ -139,6 +155,13 @@ program
           continue;
         }
         if (opts.skipExisting && existsSync(join(resolve(opts.out), l.case.id, `${system.id}.json`))) {
+          if (opts.system.startsWith('codex-')) {
+            const existing = readArtifacts(resolve(opts.out), l.case.id, [system.id]).get(system.id)!;
+            const effort = opts.reasoningEffort ?? DEFAULT_CODEX_OPTIONS.reasoningEffort;
+            if (existing.meta.model !== (opts.model ?? defaults.model) || existing.meta.reasoningEffort !== effort) {
+              throw new Error(`${l.case.id}/${system.id}: existing artifact has different model or reasoning settings; choose another --out directory.`);
+            }
+          }
           console.log(`skip  ${l.case.id}: artifact exists`);
           continue;
         }
@@ -163,7 +186,8 @@ program
   .command('judge')
   .description('Judge every pair of systems on every case with artifacts, in both orders, then write the report')
   .option('--systems <ids>', 'systems to compare, in report order', SYSTEMS.map((s) => s.id).join(','))
-  .option('--judges <specs>', 'judges: claude[:model], codex[:model]', 'claude,codex')
+  .option('--judges <specs>', 'judges: claude[:model], codex[:model], codex:model@effort', 'claude,codex')
+  .option('--split <split>', 'only cases in this split (dev or test)')
   .option('-c, --case <ids>', 'only these cases (comma-separated)')
   .option('--cases <dir>', 'cases directory', 'cases')
   .option('--artifacts <dir>', 'artifacts directory', 'results/artifacts')
@@ -171,14 +195,14 @@ program
   .option('-j, --jobs <n>', 'judging calls in parallel', '3')
   .option('--force', 'judge again even when a cached judgment matches')
   .action(
-    async (opts: { systems: string; judges: string; case?: string; cases: string; artifacts: string; out: string; jobs: string; force?: boolean }) => {
+    async (opts: { systems: string; judges: string; split?: string; case?: string; cases: string; artifacts: string; out: string; jobs: string; force?: boolean }) => {
       const systems = list(opts.systems);
       const judges = list(opts.judges).map(parseJudge);
       const { loaded } = loadAll(resolve(opts.cases));
       const wanted = opts.case ? list(opts.case) : undefined;
+      const selected = loaded.filter((l) => (!wanted || wanted.includes(l.case.id)) && (!opts.split || l.case.split === opts.split));
       const tasks: (() => Promise<PairResult>)[] = [];
-      for (const l of loaded) {
-        if (wanted && !wanted.includes(l.case.id)) continue;
+      for (const l of selected) {
         if (l.case.excluded) {
           console.log(`skip  ${l.case.id}: excluded (${l.case.excluded})`);
           continue;
@@ -218,7 +242,7 @@ program
       for (const f of failed) console.log(`FAIL  ${f}`);
       mkdirSync(resolve(opts.out), { recursive: true });
       writeFileSync(join(resolve(opts.out), 'pairs.json'), JSON.stringify(ok, null, 2) + '\n');
-      writeReport(ok, loaded.filter((l) => !wanted || wanted.includes(l.case.id)), resolve(opts.artifacts), systems, resolve(opts.out), judges.map((j) => j.id));
+      writeReport(ok, selected, resolve(opts.artifacts), systems, resolve(opts.out), judges.map((j) => j.id));
       if (failed.length) process.exitCode = 1;
     },
   );

@@ -6,6 +6,7 @@ const LINE_PATTERNS: RegExp[] = [
   /^\s*<sub>\s*Assisted-by:.*<\/sub>\s*$/i,
   /^\s*🤖\s*Generated with \[?Claude Code\]?.*$/i,
   /^\s*Generated with \[Claude Code\]\(.*\)\s*$/i,
+  /^\s*(?:🤖\s*)?Generated with \[?Codex\]?.*$/i,
   /^\s*Co-Authored-By:.*$/i,
   /^\s*Assisted-by:.*$/i,
 ];

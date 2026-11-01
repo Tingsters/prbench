@@ -12,29 +12,32 @@ import { exec } from '../util/exec.ts';
 import { AGENT_TOOLS, agentArtifact, DISALLOWED_TOOLS, DEFAULT_AGENT_OPTIONS, PR_PROMPT, replaySupport, type AgentOptions } from './agentShared.ts';
 import type { System } from './types.ts';
 
-export function tracetoonCommand(env: Record<string, string | undefined> = process.env): string[] {
-  return env.PRBENCH_TRACETOON_COMMAND ? (JSON.parse(env.PRBENCH_TRACETOON_COMMAND) as string[]) : ['tracetoon'];
+export function tracetoonCommand(env: Record<string, string | undefined> = process.env, skill?: string): string[] {
+  if (env.PRBENCH_TRACETOON_COMMAND) return JSON.parse(env.PRBENCH_TRACETOON_COMMAND) as string[];
+  if (skill && existsSync(join(skill, 'dist', 'tracetoon.mjs'))) return [process.execPath, join(skill, 'dist', 'tracetoon.mjs')];
+  return ['tracetoon'];
 }
 
-export function tracetoonSkillDir(env: Record<string, string | undefined> = process.env): string {
-  return env.PRBENCH_TRACETOON_SKILL ?? join(homedir(), '.claude', 'skills', 'tracetoon');
+export function tracetoonSkillDir(env: Record<string, string | undefined> = process.env, agent: 'claude-code' | 'codex' = 'claude-code'): string {
+  return env.PRBENCH_TRACETOON_SKILL ?? join(homedir(), agent === 'codex' ? '.agents' : '.claude', 'skills', 'tracetoon');
 }
 
 /** Installs the skill, hooks and a comic-free config into the sandbox's home. Returns extra env for the run. */
-export function installTracetoon(sandbox: Sandbox): { env: Record<string, string>; version?: string; skill: string } {
-  const source = tracetoonSkillDir();
+export function installTracetoon(sandbox: Sandbox, agent: 'claude-code' | 'codex' = 'claude-code'): { env: Record<string, string>; version?: string; skill: string } {
+  const source = tracetoonSkillDir(process.env, agent);
   if (!existsSync(join(source, 'SKILL.md'))) throw new Error(`Tracetoon skill not found at ${source} (set PRBENCH_TRACETOON_SKILL)`);
-  const skill = join(sandbox.home, '.claude', 'skills', 'tracetoon');
+  const skill = join(sandbox.home, agent === 'codex' ? '.agents' : '.claude', 'skills', 'tracetoon');
   cpSync(source, skill, { recursive: true });
 
   const config = join(sandbox.root, 'tracetoon-config.json');
   writeFileSync(config, JSON.stringify({ comic: 'off' }, null, 2) + '\n');
   const env = { TRACETOON_CONFIG: config };
 
-  const r = exec([...tracetoonCommand(), 'hook', 'install'], { env: { ...sandbox.env, ...env }, cwd: sandbox.repo });
+  const r = exec([...tracetoonCommand(process.env, skill), 'hook', 'install'], { env: { ...sandbox.env, ...env }, cwd: sandbox.repo });
   if (r.code !== 0) throw new Error(`tracetoon hook install failed: ${(r.stderr || r.stdout).trim()}`);
-  if (!existsSync(join(sandbox.home, '.claude', 'settings.json'))) {
-    throw new Error('tracetoon hook install did not write the sandbox settings (it may have used the real home directory)');
+  const hooks = agent === 'codex' ? join(sandbox.codexHome, 'hooks.json') : join(sandbox.home, '.claude', 'settings.json');
+  if (!existsSync(hooks)) {
+    throw new Error('tracetoon hook install did not write the sandbox hooks (it may have used the real home directory)');
   }
   const versionFile = join(skill, 'VERSION');
   const version = existsSync(versionFile) ? readFileSync(versionFile, 'utf8').trim() : undefined;
@@ -42,7 +45,7 @@ export function installTracetoon(sandbox: Sandbox): { env: Record<string, string
 }
 
 /** The PR text in Tracetoon's newest run folder (under the git directory), if it got that far. */
-export function tracetoonDraft(gitDir: string): { title: string; body: string; rendered: boolean; run: string } | undefined {
+export function tracetoonDraft(gitDir: string): { title: string; body: string; rendered: boolean; run: string; state?: string } | undefined {
   const runs = join(gitDir, 'tracetoon', 'runs');
   const latest = join(runs, 'latest');
   if (!existsSync(latest)) return undefined;
@@ -53,11 +56,14 @@ export function tracetoonDraft(gitDir: string): { title: string; body: string; r
   const draft = join(dir, 'body.md');
   if (!existsSync(titleFile) || !(existsSync(final) || existsSync(draft))) return undefined;
   const rendered = existsSync(final);
+  const taskFile = join(dir, 'task.json');
+  const task = existsSync(taskFile) ? JSON.parse(readFileSync(taskFile, 'utf8')) as { state?: string } : undefined;
   return {
     title: readFileSync(titleFile, 'utf8').trim(),
     body: readFileSync(rendered ? final : draft, 'utf8'),
     rendered,
     run,
+    state: task?.state,
   };
 }
 

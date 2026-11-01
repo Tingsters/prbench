@@ -3,9 +3,10 @@ import { claudeNative } from './claudeNative.ts';
 import { original } from './original.ts';
 import { tracetoonSystem } from './tracetoon.ts';
 import type { System } from './types.ts';
+import { codexSystem } from './codex.ts';
 
 export function systems(options: Partial<AgentOptions> = {}): System[] {
-  return [original, claudeNative(options), tracetoonSystem(options)];
+  return [original, claudeNative(options), tracetoonSystem(options), codexSystem(false, options), codexSystem(true, options)];
 }
 
 export const SYSTEMS: System[] = systems();
