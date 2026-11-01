@@ -174,13 +174,13 @@ for (const c of CASES) {
       split: 'heldOut' in c && c.heldOut ? 'test' : 'dev',
       mode: 'replay',
       repo: { bundle: 'repo.bundle', base, head, recordedPath: repo, baseTime: new Date(commitTime(repo, base)).toISOString() },
-      task: `The change that became ${c.repo}${'pr' in c ? ` PR #${c.pr}` : ''}: ${c.name}.`,
+      task: `Replay task label: the change that became ${c.repo}${'pr' in c ? ` PR #${c.pr}` : ''}: ${c.name}.`,
       sessions,
       facts: 'facts.json',
       ...(original ? { original } : {}),
       provenance: {
         source: `Tracetoon description eval (scripts/eval-descriptions.ts, case ${c.id})`,
-        notes: `Sessions cut to ${new Date(from).toISOString()} – ${new Date(to).toISOString()}. Real session logs: keep local.`,
+        notes: `Task is a descriptive replay label from case metadata, not a verbatim user request. Original requests, where retained, are in the session logs. Sessions cut to ${new Date(from).toISOString()} – ${new Date(to).toISOString()}. Real session logs: keep local.`,
       },
       ...('excluded' in c ? { excluded: c.excluded } : {}),
     };

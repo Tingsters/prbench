@@ -27,7 +27,7 @@ cases/<id>/
 | `repo.head` | Commit with the finished change. Required for replay. |
 | `repo.branch` | Work branch in the sandbox. Defaults to `prbench/<id>`. Not `main`. |
 | `repo.recordedPath` | Where the repository was checked out when the sessions were recorded, as the logs spell it. Defaults to the first session's `cwd`. The sandbox maps it, and its parent directory, onto the sandbox checkout. |
-| `task` | The request as the user phrased it. |
+| `task` | The user's request when available. Imports from multi-task replay sessions may use a descriptive label, explicitly identified in `provenance.notes`; retain available original messages in the sessions. |
 | `sessions[]` | `{agent, file, cwd}`. `agent` is `claude-code` or `codex`. `cwd` is the directory the session was recorded in, as written in the log: the repository or its parent. |
 | `facts` | Path to the fact sheet. |
 | `original` | `{title, body, url?}` for the PR that was published. Enables the `original` system. |
@@ -52,6 +52,8 @@ Write the fact sheet from the diff and sessions **before** reading any descripti
 Real cases hold real session logs, so they live in `cases-local/`, which git ignores. Point commands at it with `--cases cases-local`.
 
 `scripts/import-tracetoon-cases.ts` builds Tracetoon's eight description-eval cases there, on the machine that recorded them. Each case gets the repository bundle, the matched sessions cut to the case's time window, Tracetoon's hand-checked fact sheet, and the published PR when one exists. Sessions end ten seconds after the head commit; records that write PR text are removed throughout the slice, and importing fails if the published title or body opening remains. The three cases Tracetoon held out while designing its description rules are in the `test` split. Showtail is excluded because its contribution rules prohibit pull requests, leaving seven eligible cases.
+
+These imports use descriptive replay task labels rather than reconstructing a single original request from sessions that span multiple changes. `provenance.notes` records that distinction. Both agent systems receive the shared PR request, and judges get available user messages through the session evidence.
 
 ## Privacy
 
