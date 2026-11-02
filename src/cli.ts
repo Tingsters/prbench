@@ -15,6 +15,8 @@ import { DEFAULT_CODEX_OPTIONS } from './systems/codex.ts';
 import { RUBRIC_VERSION } from './judge/rubric.ts';
 import { auditEvidence } from './audit.ts';
 import { version } from '../package.json';
+import { compare, type CompareOptions } from './compare.ts';
+import { cleanupExperiment } from './run/cleanup.ts';
 
 const program = new Command('prbench').version(version).description(
   'Evaluate tools that write or change the pull requests AI coding agents produce.',
@@ -35,6 +37,22 @@ function loadAll(root: string): { loaded: LoadedCase[]; errors: CaseError[] } {
 }
 
 const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
+
+program.command('compare')
+  .description('Freeze and compare native Codex, baseline Tracetoon and candidate Tracetoon')
+  .requiredOption('--baseline-skill <dir>', 'baseline skill with matching platform binary')
+  .requiredOption('--candidate-skill <dir>', 'candidate skill with matching platform binary')
+  .requiredOption('--cases <dir>', 'case directory')
+  .requiredOption('--out <dir>', 'new experiment directory')
+  .option('--split <split>', 'dev or test', 'dev')
+  .option('--preparation <file>', 'explicit per-case preparation profile')
+  .option('--development <dir>', 'passing frozen dev experiment, required for test split')
+  .option('--prepare-only', 'freeze inputs without launching writers or judges')
+  .option('--resume', 'resume only exact matching inputs and saved artifacts')
+  .action((opts: CompareOptions) => compare(opts));
+
+program.command('cleanup').requiredOption('--experiment <dir>', 'experiment with owned pending cleanup')
+  .action((opts: { experiment: string }) => { const result = cleanupExperiment(resolve(opts.experiment)); console.log(JSON.stringify(result)); if (result.pending) process.exitCode = 1; });
 
 program.command('auth')
   .description('Sign in to the separate Codex benchmark login cache')

@@ -1,5 +1,42 @@
 # prbench
 
+### Frozen comparisons
+
+`bun run prbench compare --baseline-skill <dir> --candidate-skill <dir> --cases <dir> --split dev --out results/<experiment>`
+compares native Codex, baseline Tracetoon and candidate Tracetoon using Sol and
+Terra at medium, the same two judges in both presentation orders, and a 30-minute
+writer timeout. Each skill must include its matching platform binary in `bin/`.
+Comics and connected apps are disabled. Existing single-system commands remain available.
+
+The command freezes skill/runtime bytes and case inputs, records harness and CLI
+identity, rotates system execution order, and serializes credential use. It
+compares candidate against baseline and native separately. `--prepare-only`
+freezes without calling a model; `--resume` accepts only matching inputs and
+hash-verified saved artifacts. Changed inputs require a new output directory.
+Reports and private execution status stay in the ignored experiment directory.
+
+`--preparation <file>` accepts an explicit JSON profile with a `cases` object.
+Each case may have `commands` (nonempty argv arrays, run in the checkout) and
+`fixtures` (`name`, local Git `bundle`, full `revision`), materialized as siblings.
+Bundle paths are relative to the profile. Preparation is identical across systems,
+must leave tracked content unchanged, and is recorded separately from writer checks.
+
+For held-out cases use `--split test --development <passing-dev-experiment>`.
+The baseline, candidate and harness must match the completed development run.
+The quality gate compares factual errors, unsupported claims and claim/context
+coverage against baseline; development pr8 must have no unsupported candidate claims.
+Do not tune on held-out findings and then present another run as untouched validation.
+
+Timing metadata distinguishes installation, authentication waiting, writer
+execution, collection and setup; status files separately record cleanup and total
+time. Legacy `durationMs` retains its existing meaning. Token counts are CLI
+usage, not dollar estimates. Execution content observations remain partial when
+the tool stream does not establish them; preparation never proves writer validation.
+
+A saved draft survives cleanup failure. Retry only owned pending sandboxes with
+`bun run prbench cleanup --experiment <dir>`. Ownership tokens, roots and parents
+are checked before deletion; symlinks and unrelated processes are not followed.
+
 An evaluation harness for tools that write or change the pull requests produced by AI coding agents.
 
 It answers: **does this PR tool produce better pull requests than the agent would have without it?** It runs each system on the same fixed cases, collects the PR each one would have opened, and scores those PRs for accuracy and usefulness to a reviewer.

@@ -114,6 +114,8 @@ export function agentArtifact(opts: {
       ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
       startedAt: new Date(opts.startedAt).toISOString(),
       durationMs: Date.now() - opts.startedAt,
+      ...(opts.run.stageTimings ? { stageTimings: opts.run.stageTimings } : {}),
+      writerOutcome: { exitCode: opts.run.exitCode, timedOut: opts.run.timedOut, isError: opts.run.isError, cleanupTerminated: opts.run.cleanupTerminated },
       ...(opts.run.costUsd !== undefined ? { costUsd: opts.run.costUsd } : {}),
       ...(opts.run.inputTokens !== undefined ? { inputTokens: opts.run.inputTokens } : {}),
       ...(opts.run.outputTokens !== undefined ? { outputTokens: opts.run.outputTokens } : {}),

@@ -23,21 +23,31 @@ export function tracetoonSkillDir(env: Record<string, string | undefined> = proc
 }
 
 /** Installs the skill, hooks and a comic-free config into the sandbox's home. Returns extra env for the run. */
-export function installTracetoon(sandbox: Sandbox, agent: 'claude-code' | 'codex' = 'claude-code'): { env: Record<string, string>; version?: string; skill: string } {
-  const source = tracetoonSkillDir(process.env, agent);
+export interface PinnedTracetoon { skill: string; runtime: string }
+export function installTracetoon(sandbox: Sandbox, agent: 'claude-code' | 'codex' = 'claude-code', pinned?: PinnedTracetoon): { env: Record<string, string>; version?: string; skill: string } {
+  const source = pinned?.skill ?? tracetoonSkillDir(process.env, agent);
   if (!existsSync(join(source, 'SKILL.md'))) throw new Error(`Tracetoon skill not found at ${source} (set PRBENCH_TRACETOON_SKILL)`);
   const skill = join(sandbox.home, agent === 'codex' ? '.agents' : '.claude', 'skills', 'tracetoon');
   cpSync(source, skill, { recursive: true });
+  const pinnedRuntime = pinned ? join(sandbox.bin, `tracetoon${process.platform === 'win32' ? '.exe' : ''}`) : undefined;
+  if (pinnedRuntime) cpSync(pinned!.runtime, pinnedRuntime);
 
   const config = join(sandbox.root, 'tracetoon-config.json');
   writeFileSync(config, JSON.stringify({ comic: 'off' }, null, 2) + '\n');
-  const env = { TRACETOON_CONFIG: config };
+  const env: Record<string, string> = { TRACETOON_CONFIG: config, ...(pinnedRuntime ? { TRACETOON_BIN: pinnedRuntime, TRACETOON_ALLOW_DOWNLOAD: '0' } : {}) };
 
-  const r = exec([...tracetoonCommand(process.env, skill), 'hook', 'install'], { env: { ...sandbox.env, ...env }, cwd: sandbox.repo });
+  const r = exec([...(pinnedRuntime ? [pinnedRuntime] : tracetoonCommand(process.env, skill)), 'hook', 'install'], { env: { ...sandbox.env, ...env }, cwd: sandbox.repo });
   if (r.code !== 0) throw new Error(`tracetoon hook install failed: ${(r.stderr || r.stdout).trim()}`);
   const hooks = agent === 'codex' ? join(sandbox.codexHome, 'hooks.json') : join(sandbox.home, '.claude', 'settings.json');
   if (!existsSync(hooks)) {
     throw new Error('tracetoon hook install did not write the sandbox hooks (it may have used the real home directory)');
+  }
+  if (pinnedRuntime) {
+    const commands = (value: any): string[] => value && typeof value === 'object'
+      ? Object.entries(value).flatMap(([k, v]) => k === 'command' && typeof v === 'string' ? [v] : commands(v)) : [];
+    const normalized = pinnedRuntime.replace(/\\/g, '/');
+    if (!commands(JSON.parse(readFileSync(hooks, 'utf8'))).some((c) => c.replace(/\\/g, '/').includes(normalized)))
+      throw new Error('Sandbox hook does not use the pinned runtime.');
   }
   const versionFile = join(skill, 'VERSION');
   const version = existsSync(versionFile) ? readFileSync(versionFile, 'utf8').trim() : undefined;
@@ -45,12 +55,13 @@ export function installTracetoon(sandbox: Sandbox, agent: 'claude-code' | 'codex
 }
 
 /** Prefer the selected run, falling back to recent drafts if a later empty run hides them. */
-export function tracetoonDraft(gitDir: string): { title: string; body: string; rendered: boolean; run: string; state?: string } | undefined {
+export function tracetoonDraft(gitDir: string, invocation?: { root: string; branch: string; startedAt: number }): { title: string; body: string; rendered: boolean; run: string; state?: string } | undefined {
   const runs = join(gitDir, 'tracetoon', 'runs');
   if (!existsSync(runs)) return undefined;
   const latest = join(runs, 'latest');
   const selected = existsSync(latest) ? readFileSync(latest, 'utf8').trim() : '';
   const recent = readdirSync(runs, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort().reverse();
+  const candidates = [];
   for (const run of new Set([selected, ...recent].filter(Boolean))) {
     const dir = join(runs, run);
     const titleFile = join(dir, 'title.txt');
@@ -59,15 +70,18 @@ export function tracetoonDraft(gitDir: string): { title: string; body: string; r
     if (!existsSync(titleFile) || !(existsSync(final) || existsSync(draft))) continue;
     const rendered = existsSync(final);
     const taskFile = join(dir, 'task.json');
-    const task = existsSync(taskFile) ? JSON.parse(readFileSync(taskFile, 'utf8')) as { state?: string } : undefined;
-    return {
+    const task = existsSync(taskFile) ? JSON.parse(readFileSync(taskFile, 'utf8')) as { state?: string; root?: string; branch?: string; startedAt?: string } : undefined;
+    if (invocation && (!task || task.root !== invocation.root || task.branch !== invocation.branch || !Number.isFinite(Date.parse(task.startedAt ?? '')) || Date.parse(task.startedAt!) < invocation.startedAt)) continue;
+    candidates.push({
       title: readFileSync(titleFile, 'utf8').trim(),
       body: readFileSync(rendered ? final : draft, 'utf8'),
       rendered,
       run,
       state: task?.state,
-    };
+    });
   }
+  if (invocation && candidates.length > 1) throw new Error('More than one draft belongs to this invocation; select an explicit run rather than guessing.');
+  return candidates[0];
 }
 
 export function tracetoonSystem(options: Partial<AgentOptions> = {}): System {

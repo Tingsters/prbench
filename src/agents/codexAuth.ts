@@ -84,15 +84,17 @@ async function acquire(lock: string, timeoutMs: number): Promise<() => void> {
 export async function withCodexAuth<T>(
   destination: string,
   fn: () => Promise<T>,
-  opts: { env?: Record<string, string | undefined>; waitMs?: number } = {},
+  opts: { env?: Record<string, string | undefined>; waitMs?: number; onAcquired?: (waitMs: number) => void } = {},
 ): Promise<T> {
   const sourceDir = codexAuthHome(opts.env);
   const source = join(sourceDir, 'auth.json');
   if (!existsSync(source)) throw new Error('No benchmark Codex login. Run `bun run prbench auth codex` in a separate terminal, complete sign-in, then retry.');
   if (canonical(destination) === canonical(sourceDir)) throw new Error('The Codex run must have its own sandbox CODEX_HOME.');
+  const waiting = performance.now();
   const release = await acquire(join(sourceDir, 'prbench.lock'), opts.waitMs ?? 24 * 60 * 60_000);
   const target = join(destination, 'auth.json');
   try {
+    opts.onAcquired?.(performance.now() - waiting);
     mkdirSync(destination, { recursive: true, mode: 0o700 });
     writeFileSync(target, readFileSync(source), { mode: 0o600 });
     try { return await fn(); }

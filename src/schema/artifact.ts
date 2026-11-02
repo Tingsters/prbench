@@ -24,6 +24,10 @@ export interface ArtifactMeta {
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  experimentId?: string;
+  runtimeIdentity?: { version: string; buildId: string; sha256: string };
+  stageTimings?: Record<string, number>;
+  writerOutcome?: { exitCode: number; timedOut: boolean; isError: boolean; cleanupTerminated?: boolean };
   /** Anything that went wrong or was skipped while producing the artifact. */
   notes?: string[];
 }
@@ -85,6 +89,18 @@ export function checkArtifact(value: unknown): Problems {
     c.number(m.costUsd, 'meta.costUsd', { optional: true, min: 0 });
     c.number(m.inputTokens, 'meta.inputTokens', { optional: true, min: 0 });
     c.number(m.outputTokens, 'meta.outputTokens', { optional: true, min: 0 });
+    c.string(m.experimentId, 'meta.experimentId', { optional: true });
+    if (m.runtimeIdentity !== undefined && c.object(m.runtimeIdentity, 'meta.runtimeIdentity')) {
+      const runtime = m.runtimeIdentity as Record<string, unknown>;
+      for (const k of ['version', 'buildId', 'sha256']) c.string(runtime[k], `meta.runtimeIdentity.${k}`);
+    }
+    if (m.stageTimings !== undefined && c.object(m.stageTimings, 'meta.stageTimings'))
+      for (const [k, v] of Object.entries(m.stageTimings)) c.number(v, `meta.stageTimings.${k}`, { min: 0 });
+    if (m.writerOutcome !== undefined && c.object(m.writerOutcome, 'meta.writerOutcome')) {
+      const outcome = m.writerOutcome as Record<string, unknown>;
+      c.number(outcome.exitCode, 'meta.writerOutcome.exitCode');
+      for (const k of ['timedOut', 'isError']) if (typeof outcome[k] !== 'boolean') c.fail(`meta.writerOutcome.${k}`, 'expected boolean');
+    }
     c.strings(m.notes, 'meta.notes', true);
   }
   return c.problems;

@@ -308,7 +308,7 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
       dispose: () => removeDir(root),
     };
   } catch (err) {
-    removeDir(root);
+    try { removeDir(root); } catch { /* Preserve the creation error rather than masking it with cleanup. */ }
     throw err;
   }
 }

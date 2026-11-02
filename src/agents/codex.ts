@@ -50,6 +50,7 @@ export function parseCodexResult(stdout: string): Partial<AgentRunResult> {
 }
 
 export async function runCodex(sandbox: Sandbox, opts: CodexRunOptions): Promise<AgentRunResult> {
+  let authWaitMs = 0;
   return withCodexAuth(sandbox.codexHome, async () => {
     const started = Date.now();
     const cmd = [
@@ -65,11 +66,13 @@ export async function runCodex(sandbox: Sandbox, opts: CodexRunOptions): Promise
     opts.log?.(`codex exec --model ${opts.model} --reasoning-effort ${opts.reasoningEffort}`);
     const env = codexRunEnv({ ...sandbox.env, ...opts.env });
     const capture = startValidationCapture(sandbox, env);
+    const executionStarted = performance.now();
     const result = await runAgentProcess(cmd, {
       cwd: sandbox.repo,
       env, prompt: opts.prompt, timeoutMs: opts.timeoutMs, terminalEvent: codexTerminalEvent, onLine: capture.line,
     });
-    const parsed = parseCodexResult(result.stdout);
-    return { ...parsed, validation: capture.finish(result), exitCode: result.exitCode, timedOut: result.timedOut, cleanupTerminated: result.cleanupTerminated, isError: Boolean(parsed.isError || result.exitCode !== 0), durationMs: Date.now() - started, stderr: result.stderr.slice(-4000) };
-  });
+    const writerMs = performance.now() - executionStarted, captureStarted = performance.now();
+    const parsed = parseCodexResult(result.stdout), validation = capture.finish(result);
+    return { ...parsed, validation, exitCode: result.exitCode, timedOut: result.timedOut, cleanupTerminated: result.cleanupTerminated, isError: Boolean(parsed.isError || result.exitCode !== 0), durationMs: Date.now() - started, stageTimings: { authWaitMs, writerMs, collectionEvidenceMs: performance.now() - captureStarted }, stderr: result.stderr.slice(-4000) };
+  }, { onAcquired: (ms) => { authWaitMs = ms; } });
 }
