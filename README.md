@@ -14,6 +14,16 @@ No existing benchmark scores the whole PR (title, description, commits and wheth
 
 Needs [Bun](https://bun.sh) 1.3.14 or later and git.
 
+Install the released CLI globally with Bun:
+
+```sh
+bun install --global https://github.com/Tingsters/prbench/releases/download/v0.2.0/prbench-0.2.0.tgz
+prbench --version
+prbench --help
+```
+
+The release is a source package that includes the replay helpers. Bun remains required at runtime. Cases and result paths are relative to your working directory unless explicitly supplied. For development, use the repository commands below.
+
 ```sh
 bun install
 bun run prbench validate                 # check every case under cases/

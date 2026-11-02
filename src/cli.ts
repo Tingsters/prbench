@@ -14,8 +14,9 @@ import { codexLogin } from './agents/codexAuth.ts';
 import { DEFAULT_CODEX_OPTIONS } from './systems/codex.ts';
 import { RUBRIC_VERSION } from './judge/rubric.ts';
 import { auditEvidence } from './audit.ts';
+import { version } from '../package.json';
 
-const program = new Command('prbench').description(
+const program = new Command('prbench').version(version).description(
   'Evaluate tools that write or change the pull requests AI coding agents produce.',
 );
 
