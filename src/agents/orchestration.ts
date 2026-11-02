@@ -5,8 +5,12 @@ import { isAbsolute } from 'node:path';
 export interface ExecutionContext {
   command: string;
   cwd: string;
+  cwdSource?: 'recorded-turn-context';
 }
-export function staticExecutionContexts(code: string): ExecutionContext[] {
+export function staticExecutionContexts(
+  code: string,
+  defaultCwd?: string,
+): ExecutionContext[] {
   const file = ts.createSourceFile(
     'call.js',
     code,
@@ -81,9 +85,17 @@ export function staticExecutionContexts(code: string): ExecutionContext[] {
       );
     }
     const command = value(properties.get('cmd')),
-      cwd = value(properties.get('workdir'));
+      cwd = properties.has('workdir')
+        ? value(properties.get('workdir'))
+        : defaultCwd;
     if (!command || !cwd || !isAbsolute(cwd)) return false;
-    contexts.push({ command, cwd });
+    contexts.push({
+      command,
+      cwd,
+      ...(properties.has('workdir')
+        ? {}
+        : { cwdSource: 'recorded-turn-context' as const }),
+    });
     return true;
   };
   const print = (node: ts.Expression): boolean => {

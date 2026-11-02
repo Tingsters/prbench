@@ -10,6 +10,7 @@ if (process.env.FAKE_CODEX_LOG) appendFileSync(process.env.FAKE_CODEX_LOG, JSON.
   authPresent: existsSync(join(process.env.CODEX_HOME!, 'auth.json')),
   apiKeyPresent: Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY),
   authSourceVisible: Boolean(process.env.PRBENCH_CODEX_AUTH_HOME),
+  parentCodexStateVisible: Object.keys(process.env).some(k => k.toUpperCase().startsWith('CODEX_') && k.toUpperCase() !== 'CODEX_HOME'),
   tracetoonOff: process.env.TRACETOON, tracetoonConfig: process.env.TRACETOON_CONFIG,
   cwd: process.cwd(),
 }) + '\n');

@@ -209,7 +209,7 @@ function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: st
   // Windows env names are case-insensitive; drop every spelling of PATH first.
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
   const path = env[pathKey] ?? '';
-  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || DROPPED_ENV.includes(k)) delete env[k];
+  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || k.toUpperCase().startsWith('CODEX_') || DROPPED_ENV.includes(k.toUpperCase())) delete env[k];
   const appdata = join(sb.root, 'appdata');
   for (const d of ['roaming', 'local', 'config', 'data', 'state', 'cache']) mkdirSync(join(appdata, d), { recursive: true });
   Object.assign(env, {

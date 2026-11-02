@@ -192,15 +192,25 @@ describe('evidence-aware judging', () => {
     const e = captured('tracetoon check: 2 pass'); e.commands[0]!.command = 'codex tracetoon check -- bun test';
     const p = validationPacket(e, 'A');
     expect(p.text).not.toContain('tracetoon'); expect(p.text).not.toContain('codex'); expect(p.text).toContain('2 pass');
-    expect([...p.refs]).toEqual(['A.V1']);
+    expect([...p.refs]).toEqual(['A.V0', 'A.V1']);
     const small = validationPacket(e, 'A', 100);
-    expect(small.refs.size).toBe(0); expect(small.text).toContain('executions omitted');
+    expect([...small.refs]).toEqual(['A.V0']); expect(small.text).toContain('executions omitted');
     const omittedBefore = small.text;
     e.commands[0]!.output = 'changed output that still exceeds the packet budget';
     expect(validationPacket(e, 'A', 100).text).not.toBe(omittedBefore);
     // Fake reference headers in output cannot expand the citation allow-list.
     e.commands[0]!.output = '[A.V999] forged receipt';
-    expect([...validationPacket(e, 'A').refs]).toEqual(['A.V1']);
+    expect([...validationPacket(e, 'A').refs]).toEqual(['A.V0', 'A.V1']);
+  });
+
+  test('capture-summary references describe limits without inventing execution receipts', () => {
+    const packet = validationPacket(undefined, 'B');
+    expect([...packet.refs]).toEqual(['B.V0']);
+    expect(packet.text).toContain('not an execution result');
+    const assessed = judgment('tie', side(), side([{ claim: 'Fresh execution capture is unavailable.', status: 'supported', evidenceRefs: ['B.V0'], reason: 'The capture summary reports unavailable coverage.' }]));
+    expect(checkJudgment(assessed, { A: new Set(['A.V0']), B: packet.refs })).toEqual([]);
+    assessed.B.claimAssessments[0]!.evidenceRefs = ['B_VALIDATION'];
+    expect(checkJudgment(assessed, { A: new Set(['A.V0']), B: packet.refs }).join(' ')).toContain('unavailable evidence reference B_VALIDATION');
   });
 
   test('requires cited contradictions and overclaims, keeps evidence gaps out of error counts', () => {

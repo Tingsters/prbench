@@ -47,7 +47,8 @@ Records may overlap and are not invocation counts; nested stages must not be
 added into a pipeline total. Use the neutral writer clock for elapsed execution.
 When Codex omits an execution directory, the collector can correlate an exact
 command and time window with explicit, statically resolved tool arguments in
-that writer's own rollout. It records this as `cwdSource`; ambiguous matches,
+that writer's own rollout. An omitted `workdir` uses only the recorded turn
+context's default directory. It records this as `cwdSource`; ambiguous matches,
 dynamic code and other sessions remain unknown. Transcript code is never executed.
 This does not strengthen boundary fingerprints into atomic test attestations.
 
@@ -136,7 +137,7 @@ The `@effort` judge syntax uses the dedicated cache, an isolated home and explic
 
 ## How it fits together
 
-Rubric v3 supplies original work-session evidence and each writer's fresh command evidence separately. Missing check receipts are reported as evidence gaps; contradictions and scope overclaims have separate findings. Evidence-dependent preferences are inconclusive, and reports show evidence coverage. Legacy v2 unsupported counts may include missing fresh evidence and must not be interpreted as fabrication rates. See [validation evidence and historical audits](docs/validation-evidence.md).
+Rubric v4 supplies original work-session evidence and each writer's fresh command evidence separately. Capture-summary references `A.V0` and `B.V0` make recording limits citable; they cannot establish that a check passed, failed or did not run. Missing check receipts remain evidence gaps; contradictions and scope overclaims have separate findings. Evidence-dependent preferences are inconclusive, and reports show evidence coverage. Preserve historical v2/v3 results. Legacy v2 unsupported counts may include missing fresh evidence and must not be interpreted as fabrication rates. See [validation evidence and historical audits](docs/validation-evidence.md).
 
 To prepare existing development drafts for reassessment while preserving their originals:
 
@@ -144,7 +145,7 @@ To prepare existing development drafts for reassessment while preserving their o
 bun run prbench audit-evidence --cases cases-local --split dev --artifacts results-old/artifacts --judgments results-old/judgments --out results-evidence-audit
 ```
 
-This local audit calls no models and never reruns historical checks. Use a new output directory when judging under v3; historical reports and caches are preserved.
+This local audit calls no models and never reruns historical checks. Use a new output directory when judging under v4; historical reports and caches are preserved.
 
 - A **case** (`cases/<id>/`) fixes the starting point: a repo snapshot, the task and, for replay cases, the recorded agent sessions and resulting commits. [docs/cases.md](docs/cases.md)
 - A **system** (`src/systems/`) turns a case into a **PR artifact** (`src/schema/artifact.ts`). Systems run in a **sandbox** (`src/run/sandbox.ts`) with their own home directory holding only the case's sessions, a fake `gh` that captures PRs, and a local remote for pushes.

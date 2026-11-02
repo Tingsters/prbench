@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { codexAuthHome, withCodexAuth } from '../src/agents/codexAuth.ts';
+import { codexAuthHome, codexRunEnv, withCodexAuth } from '../src/agents/codexAuth.ts';
 import { codexTerminalEvent, parseCodexResult } from '../src/agents/codex.ts';
 import { loadCase } from '../src/schema/case.ts';
 import { runCase } from '../src/run/runner.ts';
@@ -29,12 +29,15 @@ beforeAll(() => {
   const skill = tempDir(); writeFileSync(join(skill, 'SKILL.md'), '# test skill'); writeFileSync(join(skill, 'VERSION'), '0.0.0-test');
   env({ PRBENCH_CODEX_AUTH_HOME: auth, PRBENCH_CODEX_COMMAND: JSON.stringify([process.execPath, join(import.meta.dir, 'fixtures', 'fake-codex.ts')]),
     PRBENCH_TRACETOON_COMMAND: JSON.stringify([process.execPath, join(import.meta.dir, 'fixtures', 'fake-tracetoon.ts')]),
-    PRBENCH_TRACETOON_SKILL: skill, FAKE_CODEX_LOG: log, OPENAI_API_KEY: 'test-only-unused' });
+    PRBENCH_TRACETOON_SKILL: skill, FAKE_CODEX_LOG: log, OPENAI_API_KEY: 'test-only-unused', CODEX_SESSION_ID: 'test-only-parent', CODEX_THREAD_ID: 'test-only-thread', CODEX_DAEMON_SHUTDOWN_FILE: 'test-only-control' });
 });
 afterAll(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
 const calls = () => readFileSync(log, 'utf8').trim().split('\n').map((s) => JSON.parse(s));
 
 describe('Codex credentials', () => {
+  test('child environments retain only their explicit Codex home', () => {
+    expect(codexRunEnv({ CODEX_HOME: 'sandbox-home', CODEX_SESSION_ID: 'parent', CODEX_THREAD_ID: 'parent-thread', CODEX_DAEMON_SHUTDOWN_SOCKET: 'parent-control', OPENAI_API_KEY: 'unused', OTHER: 'safe' })).toEqual({ CODEX_HOME: 'sandbox-home', OTHER: 'safe' });
+  });
   test('separate cache, serialized refreshes and cleanup on failure', async () => {
     const source = tempDir(); writeFileSync(join(source, 'auth.json'), '{"generation":1}');
     const first = tempDir(), second = tempDir();
@@ -85,6 +88,7 @@ describe('Codex systems', () => {
       expect(call.prompt).toBe(PR_PROMPT);
       expect(call.args).toEqual(expect.arrayContaining(['--model', 'gpt-6.1-sol', 'model_reasoning_effort="medium"', '--ignore-user-config', 'apps', 'apps._default.enabled=false', 'browser_use', 'computer_use', 'skip_host_skill_discovery', 'remote_plugin']));
       expect(call.authPresent).toBe(true); expect(call.apiKeyPresent).toBe(false); expect(call.authSourceVisible).toBe(false);
+      expect(call.parentCodexStateVisible).toBe(false);
       expect(call.home).not.toBe(process.env.HOME);
       expect(existsSync(join(call.codexHome, 'auth.json'))).toBe(false);
     }

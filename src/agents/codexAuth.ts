@@ -31,9 +31,10 @@ export function codexCommand(env: Record<string, string | undefined> = process.e
 
 /** OAuth runs must not silently select an inherited API key or expose the login source. */
 export function codexRunEnv(base: Record<string, string | undefined>): Record<string, string | undefined> {
-  return Object.fromEntries(Object.entries(base).filter(([key]) => ![
+  const codexHome = base.CODEX_HOME ?? Object.entries(base).find(([key]) => key.toUpperCase() === 'CODEX_HOME')?.[1];
+  return { ...Object.fromEntries(Object.entries(base).filter(([key]) => !key.toUpperCase().startsWith('CODEX_') && ![
     'OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'PRBENCH_CODEX_AUTH_HOME',
-  ].includes(key.toUpperCase())));
+  ].includes(key.toUpperCase()))), ...(codexHome === undefined ? {} : { CODEX_HOME: codexHome }) };
 }
 
 /** Interactive CLI entry point: credentials and browser URLs stay in the user's terminal. */

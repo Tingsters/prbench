@@ -5,7 +5,7 @@ import {
   displaysCommand,
   staticExecutionContexts,
 } from '../src/agents/orchestration.ts';
-import { ValidationCapture } from '../src/agents/validation.ts';
+import { ValidationCapture, redactEvidence } from '../src/agents/validation.ts';
 import { validationPacket } from '../src/judge/validation.ts';
 
 const root = join(tmpdir(), 'recorded-root'),
@@ -23,6 +23,8 @@ function capture(
   thread = 'writer',
   start = 50,
   duplicate = false,
+  defaultDirectory?: string,
+  displayedCommand = "pwsh.exe -Command 'bun test'",
 ) {
   const c = new ValidationCapture({
     cwd: '<repo>',
@@ -30,6 +32,15 @@ function capture(
     redact: (s) => s.replaceAll(root, '<repo>'),
   });
   c.line(JSON.stringify({ type: 'thread.started', thread_id: 'writer' }));
+  if (defaultDirectory)
+    c.line(
+      JSON.stringify({
+        type: 'turn_context',
+        payload: { cwd: defaultDirectory },
+      }),
+      'root-trace',
+      false,
+    );
   c.line(
     JSON.stringify({
       type: 'item.started',
@@ -37,7 +48,7 @@ function capture(
       item: {
         id: 'actual',
         type: 'command_execution',
-        command: "pwsh.exe -Command 'bun test'",
+        command: displayedCommand,
       },
     }),
   );
@@ -174,6 +185,43 @@ test('ambiguous paths and sibling sessions cannot promote a check to matching co
   }
 });
 
+test('omitted workdir uses recorded turn context, never an assumed collector root', () => {
+  const code = 'text(await tools.exec_command({cmd:"bun test"}));';
+  expect(staticExecutionContexts(code)).toEqual([]);
+  const evidence = capture(code, 'writer', 50, false, root);
+  expect(evidence.commands[0]).toMatchObject({
+    cwd: '<repo>',
+    cwdSource: 'recorded-turn-context',
+    before: tree,
+    after: tree,
+  });
+  expect(validationPacket(evidence, 'A').text).toContain(
+    'same at observed boundaries',
+  );
+  expect(capture(code).commands[0]?.cwd).toStartWith('unknown');
+  expect(
+    staticExecutionContexts(
+      'text(await tools.exec_command({cmd:"bun test",workdir:unknown}));',
+      root,
+    ),
+  ).toEqual([]);
+});
+
+test('path redaction cannot prevent command correlation or leak the original path', () => {
+  const command = `Get-Content "${join(root, 'package.json')}"`;
+  const evidence = capture(
+    `const r=await ${call(root, command)};text(r);`,
+    'writer',
+    50,
+    false,
+    undefined,
+    `pwsh.exe -Command '${command}'`,
+  );
+  expect(evidence.commands[0]?.cwd).toBe('<repo>');
+  expect(evidence.commands[0]?.cwdSource).toBe('recorded-tool-arguments');
+  expect(JSON.stringify(evidence)).not.toContain(root);
+});
+
 test('orchestration text cannot fabricate an execution record', () => {
   const c = new ValidationCapture({ cwd: '<repo>' });
   c.line(JSON.stringify({ type: 'thread.started', thread_id: 'writer' }));
@@ -210,4 +258,18 @@ test('orchestration text cannot fabricate an execution record', () => {
     false,
   );
   expect(c.finish().commands).toEqual([]);
+});
+
+test('escaped Windows paths are redacted in nested command and JSON output', () => {
+  const path = String.raw`C:\Users\private-person\repo`;
+  for (const text of [
+    path,
+    JSON.stringify({ path }),
+    JSON.stringify(JSON.stringify({ path })),
+  ]) {
+    expect(redactEvidence(text, [[path, '<repo>']])).not.toContain(
+      'private-person',
+    );
+    expect(redactEvidence(text)).not.toContain('private-person');
+  }
 });

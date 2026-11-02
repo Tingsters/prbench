@@ -14,14 +14,16 @@ const TRACE_LIMIT = 32 * 1024 * 1024;
 export function redactEvidence(text: string, paths: [string, string][] = [], secrets: string[] = []): string {
   let s = text;
   for (const [path, replacement] of [...paths].sort((a, b) => b[0].length - a[0].length)) {
-    for (const spelling of new Set([path, path.replace(/\\/g, '/')])) if (spelling) s = s.split(spelling).join(replacement);
+    const spellings = new Set([path, path.replace(/\\/g, '/')]);
+    for (let depth = 0; depth < 2; depth++) for (const value of [...spellings]) spellings.add(JSON.stringify(value).slice(1, -1));
+    for (const spelling of [...spellings].sort((a, b) => b.length - a.length)) if (spelling) s = s.split(spelling).join(replacement);
   }
   for (const secret of secrets) if (secret.length >= 8) s = s.split(secret).join('[redacted]');
   return s.replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [redacted]')
     .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/g, '[redacted]')
     .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/g, '[redacted]')
     .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|secret)\s*[=:]\s*["']?)[^\s"',;}]+/gi, '$1[redacted]')
-    .replace(/[A-Za-z]:[\\/]Users[\\/][^\\/\s"']+/g, '<user>')
+    .replace(/[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s"']+/gi, '<user>')
     .replace(/\/(?:Users|home)\/[^/\s"']+/g, '<user>');
 }
 
@@ -128,8 +130,10 @@ export class ValidationCapture {
   private seen = new Set<string>();
   private malformed = 0;
   private outputHashes = new WeakMap<CommandEvidence, ReturnType<typeof createHash>>();
+  private rawCommands = new WeakMap<CommandEvidence, string>();
   private streamThread?: string;
   private sourceThreads = new Map<string, string>();
+  private turnDirectories = new Map<string, string>();
   private pendingContexts = new Map<string, { start: number; contexts: ExecutionContext[] }>();
   private contexts: (ExecutionContext & { start: number; end: number })[] = [];
   private unknownContextWindows: { start: number; end: number }[] = [];
@@ -148,6 +152,7 @@ export class ValidationCapture {
     if (!j || typeof j !== 'object' || Array.isArray(j)) { this.malformed++; return; }
     if (live && j.type === 'thread.started' && typeof j.thread_id === 'string') this.streamThread ??= j.thread_id;
     if (!live && j.type === 'session_meta' && typeof j.payload?.id === 'string') this.sourceThreads.set(source, j.payload.id);
+    if (!live && j.type === 'turn_context' && typeof j.payload?.cwd === 'string') this.turnDirectories.set(source, j.payload.cwd);
     if (!live && this.streamThread && this.sourceThreads.get(source) === this.streamThread && j.type === 'response_item') {
       const p = j.payload ?? {}, key = `${source}:${p.call_id}`;
       if (['custom_tool_call', 'function_call'].includes(p.type)) {
@@ -155,7 +160,7 @@ export class ValidationCapture {
         const orchestrated = /^(?:functions\.)?exec$/.test(p.name ?? '') && typeof input === 'string' && (p.type === 'custom_tool_call' || !/^\s*\{/.test(input));
         const poll = /^(?:functions\.)?(?:wait|write_stdin)$/.test(p.name ?? '') && /(?:cell_id|session_id)/.test(String(input));
         if (orchestrated || poll) {
-          this.pendingContexts.set(key, { start: Date.parse(j.timestamp), contexts: orchestrated ? staticExecutionContexts(input) : [] });
+          this.pendingContexts.set(key, { start: Date.parse(j.timestamp), contexts: orchestrated ? staticExecutionContexts(input, this.turnDirectories.get(source)) : [] });
           return; // JavaScript orchestration and polling are not shell executions.
         }
       } else if (['custom_tool_call_output', 'function_call_output'].includes(p.type) && this.pendingContexts.has(key)) {
@@ -187,6 +192,7 @@ export class ValidationCapture {
             command: redact(e.command), cwd: e.cwd ? redact(e.cwd) : `unknown (writer root: ${redact(this.options.cwd)})`, startedAt: e.at ?? (live ? new Date().toISOString() : undefined),
             outcome: 'unknown', output: '', truncated: false, ...(live ? { before: this.observe() } : {}) };
           this.commands.set(id, c);
+          this.rawCommands.set(c, e.command);
         }
         if (e.aliasSession && id !== e.id) this.commands.set(e.id, c);
       } else {
@@ -194,6 +200,7 @@ export class ValidationCapture {
           c = { id: `V${this.commands.size + 1}`, source: `execution-record:${hash(source + ':' + e.id).slice(0, 24)}`,
             command: redact(e.command), cwd: e.cwd ? redact(e.cwd) : `unknown (writer root: ${redact(this.options.cwd)})`, outcome: 'unknown', output: '', truncated: false };
           this.commands.set(id, c);
+          this.rawCommands.set(c, e.command);
         }
         if (!c) continue; // Unrelated tools and result-only messages aren't shell evidence.
         const out = outputFacts(e.output ?? '');
@@ -226,12 +233,12 @@ export class ValidationCapture {
       const started = Date.parse(c.startedAt);
       if (this.unknownContextWindows.some(h => started >= h.start - 1000 && started <= h.end + 1000)) continue;
       // A small ingestion delay is tolerated only when every matching explicit context agrees.
-      const candidates = this.contexts.filter(h => started >= h.start - 1000 && started <= h.end + 1000 && displaysCommand(c.command, h.command));
+      const candidates = this.contexts.filter(h => started >= h.start - 1000 && started <= h.end + 1000 && displaysCommand(this.rawCommands.get(c) ?? c.command, h.command));
       const directories = new Set(candidates.map(h => h.cwd));
-      const unambiguous = candidates.length === 1 && unique.filter(other => other.startedAt && Date.parse(other.startedAt) >= candidates[0]!.start - 1000 && Date.parse(other.startedAt) <= candidates[0]!.end + 1000 && displaysCommand(other.command, candidates[0]!.command)).length === 1;
+      const unambiguous = candidates.length === 1 && unique.filter(other => other.startedAt && Date.parse(other.startedAt) >= candidates[0]!.start - 1000 && Date.parse(other.startedAt) <= candidates[0]!.end + 1000 && displaysCommand(this.rawCommands.get(other) ?? other.command, candidates[0]!.command)).length === 1;
       if (directories.size === 1 && unambiguous) {
         c.cwd = (this.options.redact ?? redactEvidence)([...directories][0]!);
-        c.cwdSource = 'recorded-tool-arguments';
+        c.cwdSource = candidates[0]!.cwdSource ?? 'recorded-tool-arguments';
       }
     }
     const commands: CommandEvidence[] = [];
@@ -295,7 +302,15 @@ export function startValidationCapture(sandbox: Sandbox, env: Record<string, str
           for (const line of text.slice(old?.length ?? 0).split('\n')) {
             if (!line.trim()) continue;
             let at: number;
-            try { at = Date.parse(JSON.parse(line).timestamp); } catch { capture.gap('Malformed fresh transcript events were excluded.'); continue; }
+            try {
+              const event = JSON.parse(line);
+              // Context metadata supplies identity/defaults, never an execution result.
+              // Original copied bytes remain excluded by the prefix snapshot above.
+              if (['session_meta', 'turn_context'].includes(event.type)) {
+                capture.line(line, relative(sandbox.root, file), false); continue;
+              }
+              at = Date.parse(event.timestamp);
+            } catch { capture.gap('Malformed fresh transcript events were excluded.'); continue; }
             if (!Number.isFinite(at)) { capture.gap('Untimed persisted events were excluded from fresh evidence.'); continue; }
             if (at < started || at > Date.now()) continue;
             capture.line(line, relative(sandbox.root, file), false);
