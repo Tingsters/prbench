@@ -3,6 +3,8 @@ import type { AgentRunResult } from './types.ts';
 import { codexCommand, codexRunEnv, withCodexAuth } from './codexAuth.ts';
 import { runAgentProcess } from './process.ts';
 import { startValidationCapture } from './validation.ts';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
@@ -19,6 +21,16 @@ export interface CodexRunOptions {
   timeoutMs: number;
   env?: Record<string, string>;
   log?: (message: string) => void;
+  /** Only this repository-local skill may be visible in a tool-enabled arm. */
+  skillPath?: string;
+}
+
+export function codexSkillConfiguration(repo: string, skillPath?: string): string {
+  const dirs = [join(homedir(), '.agents/skills/tracetoon'), join(homedir(), '.codex/skills/tracetoon')];
+  if (!skillPath) dirs.push(join(repo, '.agents/skills/tracetoon'));
+  const entries = dirs.flatMap(dir => [join(dir, 'SKILL.md'), dir]).map(path => ({ path, enabled: false }));
+  if (skillPath) entries.push({ path: join(skillPath, 'SKILL.md'), enabled: true });
+  return `skills.config=[${entries.map(e => `{path=${JSON.stringify(e.path.replaceAll('\\', '/'))},enabled=${e.enabled}}`).join(',')}]`;
 }
 
 export function codexTerminalEvent(line: string): 'success' | 'failure' | undefined {
@@ -60,6 +72,8 @@ export async function runCodex(sandbox: Sandbox, opts: CodexRunOptions): Promise
       '-c', 'web_search="disabled"', '--sandbox', 'danger-full-access',
       '--disable', 'apps', '-c', 'apps._default.enabled=false',
       '--disable', 'browser_use', '--disable', 'computer_use',
+      '--enable', 'skip_host_skill_discovery', '--disable', 'remote_plugin',
+      '-c', codexSkillConfiguration(sandbox.repo, opts.skillPath),
       '--enable', 'hooks', '--dangerously-bypass-hook-trust',
       '--add-dir', sandbox.gitDir, '-',
     ];

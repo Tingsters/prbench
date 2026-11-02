@@ -27,14 +27,19 @@ export interface PinnedTracetoon { skill: string; runtime: string }
 export function installTracetoon(sandbox: Sandbox, agent: 'claude-code' | 'codex' = 'claude-code', pinned?: PinnedTracetoon): { env: Record<string, string>; version?: string; skill: string } {
   const source = pinned?.skill ?? tracetoonSkillDir(process.env, agent);
   if (!existsSync(join(source, 'SKILL.md'))) throw new Error(`Tracetoon skill not found at ${source} (set PRBENCH_TRACETOON_SKILL)`);
-  const skill = join(sandbox.home, agent === 'codex' ? '.agents' : '.claude', 'skills', 'tracetoon');
+  const skill = join(agent === 'codex' ? sandbox.repo : sandbox.home, agent === 'codex' ? '.agents' : '.claude', 'skills', 'tracetoon');
+  if (existsSync(skill)) throw new Error('The case already contains a Tracetoon skill; refusing to shadow case inputs.');
   cpSync(source, skill, { recursive: true });
+  if (agent === 'codex') {
+    const exclude = join(sandbox.gitDir, 'info', 'exclude');
+    writeFileSync(exclude, (existsSync(exclude) ? readFileSync(exclude, 'utf8') : '') + '\n/.agents/skills/tracetoon/\n');
+  }
   const pinnedRuntime = pinned ? join(sandbox.bin, `tracetoon${process.platform === 'win32' ? '.exe' : ''}`) : undefined;
   if (pinnedRuntime) cpSync(pinned!.runtime, pinnedRuntime);
 
   const config = join(sandbox.root, 'tracetoon-config.json');
   writeFileSync(config, JSON.stringify({ comic: 'off' }, null, 2) + '\n');
-  const env: Record<string, string> = { TRACETOON_CONFIG: config, ...(pinnedRuntime ? { TRACETOON_BIN: pinnedRuntime, TRACETOON_ALLOW_DOWNLOAD: '0' } : {}) };
+  const env: Record<string, string> = { TRACETOON_CONFIG: config, TRACETOON_ASSETS: join(skill, 'assets'), TRACETOON_LAUNCHER: join(skill, 'bin', process.platform === 'win32' ? 'tracetoon.cmd' : 'tracetoon'), ...(pinnedRuntime ? { TRACETOON_BIN: pinnedRuntime, TRACETOON_ALLOW_DOWNLOAD: '0' } : {}) };
 
   const r = exec([...(pinnedRuntime ? [pinnedRuntime] : tracetoonCommand(process.env, skill)), 'hook', 'install'], { env: { ...sandbox.env, ...env }, cwd: sandbox.repo });
   if (r.code !== 0) throw new Error(`tracetoon hook install failed: ${(r.stderr || r.stdout).trim()}`);

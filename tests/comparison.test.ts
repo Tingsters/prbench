@@ -86,6 +86,15 @@ test('frozen comparison runs three systems, both orders, and resumes only matchi
       ),
     ).toBe(true);
     expect(summary.qualityGate.passed).toBe(true);
+    const isolation = JSON.parse(
+      readFileSync(join(opts.out, 'isolation.json'), 'utf8'),
+    );
+    expect(isolation.probes.length).toBe(6);
+    expect(
+      isolation.probes.every(
+        (p: any) => p.passed && p.catalogue.toolCalls === 0,
+      ),
+    ).toBe(true);
     expect(
       summary.operations
         .filter((r: any) => r.system !== 'codex-native')
@@ -97,6 +106,16 @@ test('frozen comparison runs three systems, both orders, and resumes only matchi
     const before = readFileSync(log, 'utf8');
     await compare({ ...opts, resume: true });
     expect(readFileSync(log, 'utf8')).toBe(before);
+    const proofPath = join(opts.out, 'isolation.receipt.json');
+    const proof = readFileSync(proofPath, 'utf8');
+    writeFileSync(
+      proofPath,
+      JSON.stringify({ experiment: isolation.experiment, digest: 'forged' }),
+    );
+    await expect(compare({ ...opts, resume: true })).rejects.toThrow(
+      'isolation proof',
+    );
+    writeFileSync(proofPath, proof);
     writeFileSync(join(candidate, 'SKILL.md'), '# Changed input');
     await expect(compare({ ...opts, resume: true })).rejects.toThrow(
       'inputs changed',

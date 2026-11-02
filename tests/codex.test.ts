@@ -83,13 +83,14 @@ describe('Codex systems', () => {
     const plugin = calls().at(-1);
     for (const call of [baseline, plugin]) {
       expect(call.prompt).toBe(PR_PROMPT);
-      expect(call.args).toEqual(expect.arrayContaining(['--model', 'gpt-6.1-sol', 'model_reasoning_effort="medium"', '--ignore-user-config', 'apps', 'apps._default.enabled=false', 'browser_use', 'computer_use']));
+      expect(call.args).toEqual(expect.arrayContaining(['--model', 'gpt-6.1-sol', 'model_reasoning_effort="medium"', '--ignore-user-config', 'apps', 'apps._default.enabled=false', 'browser_use', 'computer_use', 'skip_host_skill_discovery', 'remote_plugin']));
       expect(call.authPresent).toBe(true); expect(call.apiKeyPresent).toBe(false); expect(call.authSourceVisible).toBe(false);
       expect(call.home).not.toBe(process.env.HOME);
       expect(existsSync(join(call.codexHome, 'auth.json'))).toBe(false);
     }
     expect(baseline.tracetoonOff).toBe('0'); expect(plugin.tracetoonOff).toBeUndefined();
-    expect(existsSync(join(tool.sandboxRoot!, 'home', '.agents', 'skills', 'tracetoon', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(plugin.cwd, '.agents', 'skills', 'tracetoon', 'SKILL.md'))).toBe(true);
+    expect(exec(['git', 'status', '--porcelain'], { cwd: plugin.cwd }).stdout).toBe('');
     expect(existsSync(join(tool.sandboxRoot!, 'codex', 'hooks.json'))).toBe(true);
     expect(native.artifact.meta).toMatchObject({ agent: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'medium', toolVersion: '9.8.7', inputTokens: 100, outputTokens: 20 });
     expect(native.artifact.meta.costUsd).toBeUndefined();

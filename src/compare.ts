@@ -13,6 +13,7 @@ import { codexCommand } from './agents/codexAuth.ts';
 import { codexSystem } from './systems/codex.ts';
 import { PR_PROMPT } from './systems/agentShared.ts';
 import { runCase } from './run/runner.ts';
+import { verifyComparisonIsolation } from './run/isolation.ts';
 import type { Sandbox } from './run/sandbox.ts';
 import {
   artifactDigest,
@@ -165,6 +166,7 @@ interface Manifest {
   harnessRevision: string;
   bunVersion: string;
   agentCommandHash: string;
+  probeCaseHash: string;
   preparationHash: string;
   cliVersion: string;
   frozenPreparationHash?: string;
@@ -186,6 +188,7 @@ export interface CompareOptions {
   resume?: boolean;
   preparation?: string;
   prepareOnly?: boolean;
+  verifyOnly?: boolean;
   development?: string;
 }
 export function assertResume(expected: unknown, actual: unknown): void {
@@ -338,6 +341,7 @@ export async function compare(opts: CompareOptions): Promise<void> {
     harnessRevision: git(['rev-parse', 'HEAD'], harnessRoot),
     bunVersion: Bun.version,
     agentCommandHash: hash(JSON.stringify(codexCommand())),
+    probeCaseHash: directoryDigest(join(harnessRoot, 'cases', 'example-greet-default')),
     preparationHash,
     cliVersion: cli.stdout.trim(),
     settings: {
@@ -373,6 +377,7 @@ export async function compare(opts: CompareOptions): Promise<void> {
       cpSync(l.dir, join(root, 'inputs', 'cases', l.case.id), {
         recursive: true,
       });
+    cpSync(join(harnessRoot, 'cases', 'example-greet-default'), join(root, 'inputs', 'isolation', 'example-greet-default'), { recursive: true });
     if (preparation) {
       const frozen = structuredClone(preparation);
       for (const entry of Object.values(frozen.cases))
@@ -402,6 +407,7 @@ export async function compare(opts: CompareOptions): Promise<void> {
     );
   for (const c of manifest.cases)
     assertResume(c.hash, directoryDigest(join(root, 'inputs', 'cases', c.id)));
+  assertResume(manifest.probeCaseHash, directoryDigest(join(root, 'inputs', 'isolation', 'example-greet-default')));
   if (opts.prepareOnly) {
     console.log(`Frozen experiment: ${join(root, 'manifest.json')}`);
     return;
@@ -424,6 +430,15 @@ export async function compare(opts: CompareOptions): Promise<void> {
           hash(readFileSync(f.bundle)),
         );
   }
+  await verifyComparisonIsolation({
+    root, experiment: manifest.id, probeCase: join(root, 'inputs', 'isolation', 'example-greet-default'), models: MODELS,
+    variants: SYSTEMS.map(system => {
+      const which = system === 'tracetoon-baseline' ? 'baseline' : 'candidate';
+      const skill = join(root, 'inputs', which);
+      return { system, ...(system === 'codex-native' ? {} : { pinned: { skill, runtime: join(skill, 'bin', manifest[which].runtimeName) } }) };
+    }),
+  });
+  if (opts.verifyOnly) return;
   const reports: { model: string; comparison: string; report: Report }[] = [];
   const writerMetrics: Record<string, unknown>[] = [];
   for (const [modelIndex, model] of MODELS.entries()) {

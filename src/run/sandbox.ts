@@ -197,6 +197,10 @@ const DROPPED_ENV = [
   'CODEX_HOME',
   'CLAUDE_CONFIG_DIR',
   'TRACETOON_CONFIG',
+  'TRACETOON_BIN',
+  'TRACETOON_ASSETS',
+  'TRACETOON_LAUNCHER',
+  'TRACETOON_ALLOW_DOWNLOAD',
 ];
 
 function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: string }, c: Case): Record<string, string> {

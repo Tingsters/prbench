@@ -48,6 +48,7 @@ program.command('compare')
   .option('--preparation <file>', 'explicit per-case preparation profile')
   .option('--development <dir>', 'passing frozen dev experiment, required for test split')
   .option('--prepare-only', 'freeze inputs without launching writers or judges')
+  .option('--verify-only', 'freeze inputs and run unscored skill isolation probes only')
   .option('--resume', 'resume only exact matching inputs and saved artifacts')
   .action((opts: CompareOptions) => compare(opts));
 

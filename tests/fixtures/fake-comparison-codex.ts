@@ -1,6 +1,55 @@
 // Never run the writer's fake gh path inside a judge, whose environment has no fake gh.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
+if (!process.argv.includes('--version')) {
+  const prompt = readFileSync(0, 'utf8');
+  if (prompt.startsWith('Without running any tools, print the absolute path')) {
+    const path = join(process.cwd(), '.agents/skills/tracetoon/SKILL.md');
+    const enabled = Boolean(process.env.TRACETOON_CONFIG);
+    const catalogue =
+      '### Available skills\n' +
+      (enabled
+        ? `- tracetoon: Synthetic skill. (file: ${path})`
+        : '- sample: An unrelated skill. (file: /sample/SKILL.md)');
+    const dir = join(process.env.CODEX_HOME!, 'sessions');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'fresh.jsonl'),
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'developer',
+          content: [{ text: catalogue }],
+        },
+      }),
+    );
+    if (process.env.FAKE_CODEX_LOG)
+      appendFileSync(
+        process.env.FAKE_CODEX_LOG,
+        JSON.stringify({ prompt, probe: true }) + '\n',
+      );
+    console.log(
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: enabled ? path : 'NONE' },
+      }),
+    );
+    console.log(
+      JSON.stringify({
+        type: 'turn.completed',
+        usage: { input_tokens: 50, output_tokens: 10 },
+      }),
+    );
+    process.exit(0);
+  }
+  process.env.FAKE_CODEX_PROMPT = prompt;
+}
 if (
   !process.argv.includes('-o') &&
   !process.argv.includes('--version') &&

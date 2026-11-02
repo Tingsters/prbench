@@ -15,6 +15,15 @@ freezes without calling a model; `--resume` accepts only matching inputs and
 hash-verified saved artifacts. Changed inputs require a new output directory.
 Reports and private execution status stay in the ignored experiment directory.
 
+Before scoring, six short unscored probes (each model and system) verify the
+actual startup skill catalogue and require zero tool calls. Native must see no
+Tracetoon skill; each tool arm must see exactly its repository-local frozen copy.
+The probes use the synthetic example, never held-out content. `--verify-only`
+stops after this check. Hash-verified isolation receipts are reused on resume.
+Codex runs suppress host skill discovery and remote plugins and explicitly
+disable global Tracetoon entries. These CLI feature flags are version-specific;
+an unavailable flag or an unrecognized catalogue fails before draft collection.
+
 `--preparation <file>` accepts an explicit JSON profile with a `cases` object.
 Each case may have `commands` (nonempty argv arrays, run in the checkout) and
 `fixtures` (`name`, local Git `bundle`, full `revision`), materialized as siblings.

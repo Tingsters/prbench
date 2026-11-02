@@ -27,7 +27,7 @@ export function codexSystem(withTracetoon: boolean, options: Partial<AgentOption
       const installationMs = Date.now() - started, invocationStartedAt = Date.now();
       const run = await runCodex(sandbox, {
         prompt: PR_PROMPT, model: o.model, reasoningEffort: effort, timeoutMs: o.timeoutMs,
-        env: tt?.env ?? { TRACETOON: '0' }, log,
+        env: tt?.env ?? { TRACETOON: '0' }, skillPath: tt?.skill, log,
       });
       const collectionStart = Date.now();
       const pr = sandbox.capturedPRs().at(-1);
