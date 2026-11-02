@@ -15,6 +15,19 @@ function gh(args: string[], env: Record<string, string>, cwd: string) {
 }
 
 describe('rewritePaths', () => {
+  test('rewrites local preview URLs without mapping a neighboring repository', () => {
+    const text = JSON.stringify({ request: 'Open file:///C:/dev/tool/.git/tracetoon/runs/one/out/preview.html', other: 'file:///C:/dev/toolkit/file.html' });
+    expect(JSON.parse(rewritePaths(text, [['C:\\dev\\tool', 'D:\\temp\\work\\tool']]))).toEqual({
+      request: 'Open file:///D:/temp/work/tool/.git/tracetoon/runs/one/out/preview.html', other: 'file:///C:/dev/toolkit/file.html',
+    });
+  });
+
+  test('maps encoded file URLs across platform path styles exactly once', () => {
+    const text = JSON.stringify({ preview: 'file:///C:/My%20Repo/tool/preview.html' });
+    expect(JSON.parse(rewritePaths(text, [['C:\\My Repo\\tool', '/sandbox/work/tool'], ['C:\\My Repo', '/sandbox/work']]))).toEqual({ preview: 'file:///sandbox/work/tool/preview.html' });
+    expect(JSON.parse(rewritePaths(JSON.stringify({ preview: 'file:///old/repo/preview.html' }), [['/old/repo', 'D:\\new repo#one']]))).toEqual({ preview: 'file:///D:/new%20repo%23one/preview.html' });
+  });
+
   test('rewrites a Windows path in both spellings inside JSON strings', () => {
     const from = 'C:\\Users\\ada\\repo';
     const to = 'D:\\tmp\\sb\\repo';

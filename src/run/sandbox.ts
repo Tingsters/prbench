@@ -84,6 +84,14 @@ export function msysPath(path: string): string | undefined {
   return m ? `/${m[1]!.toLowerCase()}/${m[2]!.replace(/\\/g, '/')}` : undefined;
 }
 
+/** File URLs use the recorded path's syntax even when replay runs on another OS. */
+function fileUri(path: string): string | undefined {
+  const fwd = path.replace(/\\/g, '/');
+  if (!/^(?:[A-Za-z]:\/|\/)/.test(fwd)) return undefined;
+  const prefix = fwd.startsWith('//') ? 'file:' : fwd.startsWith('/') ? 'file://' : 'file:///';
+  return prefix + encodeURI(fwd).replace(/#/g, '%23').replace(/\?/g, '%3F');
+}
+
 /**
  * Rewrites recorded paths wherever they appear inside JSON strings, in each
  * spelling a Windows path takes in agent logs: native (C:\x), forward-slash
@@ -94,6 +102,8 @@ export function rewritePaths(jsonl: string, pairs: [from: string, to: string][])
   const esc = (s: string) => JSON.stringify(s).slice(1, -1);
   const map = new Map<string, string>();
   for (const [from, to] of pairs) {
+    const fromUri = fileUri(from), toUri = fileUri(to);
+    if (fromUri && toUri) map.set(esc(fromUri), esc(toUri));
     map.set(esc(from), esc(to));
     const fwd = from.replace(/\\/g, '/');
     if (fwd !== from) map.set(esc(fwd), esc(to.replace(/\\/g, '/')));

@@ -52,7 +52,7 @@ Each run gets a fresh sandbox (`src/run/sandbox.ts`):
 
 - The repository is fetched from the case into `<root>/work/<name>`, named like the recorded checkout, with `main` and `origin/main` at the base commit and the work on a feature branch. Only those refs exist, so tools see an ordinary branch.
 - `HOME`, `USERPROFILE`, `CODEX_HOME`, `APPDATA`, `LOCALAPPDATA` and the `XDG_*` directories point into the sandbox. The only agent logs there are the case's sessions.
-- Paths recorded in the logs are rewritten: the repository's recorded path maps to the sandbox checkout, and its parent directory to the sandbox's `work` directory, so a session started from the parent still lines up. Only whole paths are rewritten.
+- Paths recorded in the logs are rewritten: the repository's recorded path maps to the sandbox checkout, and its parent directory to the sandbox's `work` directory, so a session started from the parent still lines up. Local file URLs, including encoded spaces, follow the same mapping. Only whole paths are rewritten.
 - A fake `gh` on `PATH` records every call and turns `gh pr create` into a captured PR. Pushes go to a local bare repo. Git may only use local repositories (`GIT_ALLOW_PROTOCOL=file`), so nothing is fetched from or pushed to the network. GitHub tokens are removed from the environment.
 - Systems get the case without its `facts` field, and the fact sheet is never copied into the sandbox.
 
