@@ -4,15 +4,17 @@ import type { CommandEvidence } from '../schema/validation.ts';
 export function hostAgentStateFindings(commands: Pick<CommandEvidence, 'id' | 'command'>[]) {
   const findings: { commandId: string; kind: 'host-agent-state' | 'host-instructions' | 'outside-case-inputs' }[] = [];
   for (const command of commands) {
-    // PowerShell execution records can split a relative .\ path with adjacent
-    // quote fragments (.'"\path). Keep its dot before tokenizing the quotes;
-    // otherwise the remaining /path token looks like an absolute host path.
+    // PowerShell execution records can split a path with adjacent quote
+    // fragments. Keep relative and redirected-home prefixes attached before
+    // tokenizing; otherwise /path looks like an absolute host path.
     const normalized = command.command.replaceAll(String.fromCharCode(92), '/').replace(/\/+/g, '/')
-      .replace(/\.["']+(?=\/)/g, '.');
+      .replace(/(\.|~|\$(?:env:)?(?:CODEX_HOME|CLAUDE_CONFIG_DIR|HOME|USERPROFILE))["']+(?=\/)/gi, '$1');
     for (let token of normalized.split(/[\s"'`;(),]+/)) {
       try { token = decodeURIComponent(token); } catch { /* Keep an undecodable path conservative. */ }
       token = token.replace(/^file:\/*(?=[A-Za-z]:\/|<)/i, '').replace(/^file:\/*/i, '/');
-      if (/^(?:<repo>|<sandbox>)(?:\/|$)/i.test(token) || /^\$(?:env:)?(?:CODEX_HOME|CLAUDE_CONFIG_DIR)(?:\/|$)/i.test(token)) continue;
+      // createSandbox redirects these homes for every system. Literal host
+      // paths remain observable even when they name the same agent folders.
+      if (/^(?:<repo>|<sandbox>|~)(?:\/|$)/i.test(token) || /^\$(?:env:)?(?:CODEX_HOME|CLAUDE_CONFIG_DIR|HOME|USERPROFILE)(?:\/|$)/i.test(token)) continue;
       const absolute = /^(?:<user>(?:\/|$)|[A-Za-z]:\/|\/|~\/|\$(?:HOME|env:USERPROFILE|env:HOME)(?:\/|$))/i.test(token);
       if (!absolute) continue;
       let kind: (typeof findings)[number]['kind'] | undefined;

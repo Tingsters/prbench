@@ -166,6 +166,19 @@ describe('createSandbox', () => {
     }
   });
 
+  test.skipIf(process.platform !== 'win32')('PowerShell resolves home aliases inside the sandbox', () => {
+    const sb = createSandbox(loaded, { parent: tempDir() });
+    try {
+      const powershell = Bun.which('pwsh.exe') ?? Bun.which('powershell.exe');
+      expect(powershell).not.toBeNull();
+      const r = exec([powershell!, '-NoProfile', '-Command', '[ordered]@{home=$HOME; envHome=$env:HOME; userProfile=$env:USERPROFILE; tilde=(Convert-Path ~)} | ConvertTo-Json -Compress'], { cwd: sb.repo, env: sb.env });
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.stdout)).toEqual({ home: sb.home, envHome: sb.home, userProfile: sb.home, tilde: sb.home });
+    } finally {
+      sb.dispose();
+    }
+  });
+
   test('captures PRs through a fake gh and sends pushes to a local remote', () => {
     const sb = createSandbox(loaded, { parent: tempDir() });
     try {

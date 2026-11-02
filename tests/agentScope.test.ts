@@ -47,3 +47,18 @@ test('keeps PowerShell serialized relative paths distinct from absolute host pat
   ].map((command, i) => ({ id: `V${i + 2}`, command }));
   expect(hostAgentStateFindings(absolute)).toEqual(absolute.map(({ id }) => ({ commandId: id, kind: 'host-agent-state' })));
 });
+
+test('permits redirected sandbox homes including serialized PowerShell paths', () => {
+  const commands = [
+    'cat $HOME/.claude/settings.json',
+    'cat ~/.agents/skills/tool/SKILL.md',
+    'cat $env:USERPROFILE/.codex/config.toml',
+    `Get-Content "$env:HOME'"\\\\.codex\\\\config.toml"`,
+    `Get-Content "$env:HOME'"\\\\.claude\\\\settings.json"`,
+    `Get-Content "$env:CODEX_HOME'"\\\\sessions\\\\session.jsonl"`,
+  ].map((command, i) => ({ id: `V${i + 1}`, command }));
+  expect(hostAgentStateFindings(commands)).toEqual([]);
+  expect(hostAgentStateFindings([{ id: 'V9', command: 'cat C:/Users/someone/.codex/config.toml' }])).toEqual([
+    { commandId: 'V9', kind: 'host-agent-state' },
+  ]);
+});
