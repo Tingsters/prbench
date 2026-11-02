@@ -64,6 +64,13 @@ Real sessions are long and cover more than one change. The importer (`scripts/im
 
 A slice may not start with a record bigger than 64 KB: readers find a session's working directory in the first 128 KB of the file, so a huge first record hides the whole session.
 
+Genuine user requests, typed rejection feedback and question replies remain in the
+slice when they mention a preview path or PR command. Such references describe
+the task and do not by themselves establish that a record authored PR text.
+Synthetic notifications and ordinary tool output receive no such exception.
+The published-title/body leak check still applies to every retained record,
+including user input; a case with leaked answer text fails import.
+
 ## Judging
 
 `prbench judge` compares every pair of systems on every case with artifacts and a fact sheet (`src/judge/`).

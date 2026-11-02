@@ -12,6 +12,8 @@
 //                  wrote, this one or an earlier one, out of the logs, so no
 //                  system can copy it. The import fails if the published
 //                  title or body still appears in a slice.
+//                  User requests and feedback mentioning preview paths remain
+//                  source input and still pass through the answer-key leak check.
 //   facts.json     Tracetoon's hand-checked fact sheet
 //   original.md    the PR that was published, when there is one
 //
@@ -22,6 +24,7 @@ import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { CASE_SCHEMA, FACTS_SCHEMA, type Case, type CaseSession, type Facts } from '../src/schema/case.ts';
 import { exec, git } from '../src/util/exec.ts';
+import { assertNoPublishedPrText, sliceReplaySession } from '../src/import/session.ts';
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -63,56 +66,7 @@ const { scan } = (await import(join(tracetoon, 'src', 'pipeline.ts'))) as {
   };
 };
 
-/** Records that write or publish PR text: Tracetoon run folders, or gh pr create/edit. */
-const WRITES_PR_TEXT = /tracetoon(?:\\\\|\/)+runs(?:\\\\|\/)|\bgh\s+pr\s+(?:create|edit)\b/;
-
-/** Fails when the published PR's title or opening line appears in a slice. */
-function assertNoLeak(sliceText: string, title: string, body: string): void {
-  const esc = (s: string) => JSON.stringify(s).slice(1, -1);
-  const opening = body
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .split('\n')
-    .map((l) => l.replace(/^[#>*\-\s]+/, '').trim())
-    .find((l) => l.length >= 40);
-  for (const needle of [title, opening?.slice(0, 80)].filter((s): s is string => Boolean(s))) {
-    if (sliceText.includes(esc(needle)) || sliceText.includes(needle)) {
-      throw new Error(`the published PR leaks into the session slice: "${needle.slice(0, 60)}"`);
-    }
-  }
-}
-
-/** Largest first record a slice may start with (well under readers' 128 KB head window). */
-const HEAD_LIMIT = 64 * 1024;
-
 const commitTime = (repo: string, ref: string) => Number(git(['show', '-s', '--format=%ct', ref], repo)) * 1000;
-
-/** Keeps lines timestamped inside [from, to]; Codex's session_meta line is always kept. */
-function slice(text: string, from: number, to: number): { text: string; kept: number; cwd?: string } {
-  const kept: string[] = [];
-  let cwd: string | undefined;
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    let j: Record<string, any>;
-    try {
-      j = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const isMeta = j.type === 'session_meta';
-    const t = Date.parse(j.timestamp ?? '');
-    if (!isMeta && !(t >= from && t <= to)) continue;
-    // PR text written for this or any other PR is the answer key; drop it.
-    if (WRITES_PR_TEXT.test(line)) continue;
-    // Readers find a session's working directory in the first records of the
-    // file, reading only its first 128 KB (Showtail's agent-traces). A slice
-    // that starts mid-session can open with one huge record, which hides the
-    // whole file, so start at the first small record that names its cwd.
-    if (kept.length === 0 && !isMeta && (line.length > HEAD_LIMIT || !(j.cwd ?? j.payload?.cwd))) continue;
-    cwd ??= j.cwd ?? j.payload?.cwd;
-    kept.push(line);
-  }
-  return { text: kept.join('\n') + '\n', kept: kept.length, cwd };
-}
 
 for (const c of CASES) {
   if (only && !only.includes(c.id)) continue;
@@ -139,7 +93,7 @@ for (const c of CASES) {
     const sessions: CaseSession[] = [];
     for (const [i, m] of matches.entries()) {
       const agent = m.session.agent === 'codex' ? 'codex' : 'claude-code';
-      const s = slice(readFileSync(m.session.source, 'utf8'), from, to);
+      const s = sliceReplaySession(readFileSync(m.session.source, 'utf8'), from, to);
       if (s.kept === 0 || !s.cwd) continue;
       const file = `session-${i + 1}-${agent}.jsonl`;
       writeFileSync(join(dir, file), s.text);
@@ -164,7 +118,7 @@ for (const c of CASES) {
       const pr = JSON.parse(r.stdout) as { title: string; body: string; url: string };
       writeFileSync(join(dir, 'original.md'), pr.body.replace(/\r\n/g, '\n'));
       original = { title: pr.title, body: 'original.md', url: pr.url };
-      for (const s of sessions) assertNoLeak(readFileSync(join(dir, s.file), 'utf8'), pr.title, pr.body);
+      for (const s of sessions) assertNoPublishedPrText(readFileSync(join(dir, s.file), 'utf8'), pr.title, pr.body);
     }
 
     const kase: Case = {
