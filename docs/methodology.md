@@ -85,6 +85,15 @@ including user input; a case with leaked answer text fails import.
 
 A sanity check run on case `pr12` (the published PR against an identical copy) came out a tie for both judges in both orders.
 
+The neutral session excerpt retains paired structured questions and answers from
+Claude and Codex, including typed asynchronous user replies. These are labeled
+as recorded Q&A and prioritized with user requests; arbitrary tool output is not
+treated as a decision. Long entries remain explicitly clipped, and secrets are
+redacted before clipping. When a fact sheet calls an answer unrecoverable, check
+the retained source rather than assuming a prior digest's truncation is a source
+limit. Correct development ground truth for all systems in a new frozen cohort,
+preserving the old inputs and results.
+
 ## Metrics still to build
 
 1. **Accuracy checker.** Independently validate extracted claims against code and execution evidence, classify mismatches with Gong et al.'s taxonomy, and validate against their labelled PRs. Until then, accuracy comes from model judgments under the v4 evidence contract; synthetic regression tests do not establish semantic judge reliability.
