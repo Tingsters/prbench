@@ -35,3 +35,15 @@ test('permits supplied checkout, isolated agent homes and standard runtimes', ()
   ].map((command, i) => ({ id: `V${i + 1}`, command }));
   expect(hostAgentStateFindings(commands)).toEqual([]);
 });
+
+test('keeps PowerShell serialized relative paths distinct from absolute host paths', () => {
+  const relative = `& .'"\\\\.agents\\\\skills\\\\tracetoon\\\\bin\\\\tracetoon.cmd check`;
+  expect(hostAgentStateFindings([{ id: 'V1', command: relative }])).toEqual([]);
+  // A separate dot command must not hide an absolute path in its argument.
+  const absolute = [
+    `. '"\\\\.agents\\\\skills\\\\tracetoon\\\\SKILL.md`,
+    `& '"C:\\\\Users\\\\someone\\\\.agents\\\\skills\\\\tracetoon\\\\SKILL.md`,
+    `cat '"/home/someone/.agents/skills/tracetoon/SKILL.md`,
+  ].map((command, i) => ({ id: `V${i + 2}`, command }));
+  expect(hostAgentStateFindings(absolute)).toEqual(absolute.map(({ id }) => ({ commandId: id, kind: 'host-agent-state' })));
+});

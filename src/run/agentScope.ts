@@ -4,7 +4,11 @@ import type { CommandEvidence } from '../schema/validation.ts';
 export function hostAgentStateFindings(commands: Pick<CommandEvidence, 'id' | 'command'>[]) {
   const findings: { commandId: string; kind: 'host-agent-state' | 'host-instructions' | 'outside-case-inputs' }[] = [];
   for (const command of commands) {
-    const normalized = command.command.replaceAll(String.fromCharCode(92), '/').replace(/\/+/g, '/');
+    // PowerShell execution records can split a relative .\ path with adjacent
+    // quote fragments (.'"\path). Keep its dot before tokenizing the quotes;
+    // otherwise the remaining /path token looks like an absolute host path.
+    const normalized = command.command.replaceAll(String.fromCharCode(92), '/').replace(/\/+/g, '/')
+      .replace(/\.["']+(?=\/)/g, '.');
     for (let token of normalized.split(/[\s"'`;(),]+/)) {
       try { token = decodeURIComponent(token); } catch { /* Keep an undecodable path conservative. */ }
       token = token.replace(/^file:\/*(?=[A-Za-z]:\/|<)/i, '').replace(/^file:\/*/i, '/');
