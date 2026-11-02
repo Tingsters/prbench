@@ -30,7 +30,13 @@ Do not tune on held-out findings and then present another run as untouched valid
 Timing metadata distinguishes installation, authentication waiting, writer
 execution, collection and setup; status files separately record cleanup and total
 time. Legacy `durationMs` retains its existing meaning. Token counts are CLI
-usage, not dollar estimates. Execution content observations remain partial when
+usage, not dollar estimates. The adapter retains invocation-owned internal
+Tracetoon stage timers before cleanup and reports their counts, totals and
+medians alongside the neutral pipeline timings. Invalid or unavailable logs
+remain explicit gaps. Runtime timers are diagnostics, not validation evidence.
+Records may overlap and are not invocation counts; nested stages must not be
+added into a pipeline total. Use the neutral writer clock for elapsed execution.
+Execution content observations remain partial when
 the tool stream does not establish them; preparation never proves writer validation.
 
 A saved draft survives cleanup failure. Retry only owned pending sandboxes with

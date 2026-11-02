@@ -16,9 +16,65 @@ import { runCase } from '../src/run/runner.ts';
 import { original } from '../src/systems/original.ts';
 import { loadCase } from '../src/schema/case.ts';
 import { createSandbox } from '../src/run/sandbox.ts';
-import { tracetoonDraft } from '../src/systems/tracetoon.ts';
+import { tracetoonDraft, tracetoonTimings } from '../src/systems/tracetoon.ts';
 import { cleanupTemps, tempDir, EXAMPLE } from './helpers.ts';
 afterAll(cleanupTemps);
+
+test('internal stage timers are retained only for this invocation and invalid records stay explicit', () => {
+  const git = tempDir(),
+    root = join(git, 'tracetoon', 'runs'),
+    start = Date.now();
+  for (const [id, owner] of [
+    ['20260101-000000', '/work'],
+    ['20260101-000001', '/other'],
+  ]) {
+    const dir = join(root, id!);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'task.json'),
+      JSON.stringify({
+        root: owner,
+        branch: 'feature',
+        startedAt: new Date(start + 1).toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(dir, 'timings.json'),
+      JSON.stringify([
+        { stage: 'digest', durationMs: 12 },
+        { stage: 'context', durationMs: 3 },
+        { stage: 'check', durationMs: -1 },
+      ]),
+    );
+  }
+  const timing = tracetoonTimings(git, {
+    root: '/work',
+    branch: 'feature',
+    startedAt: start,
+  });
+  expect(timing.entries).toEqual([
+    { stage: 'digest', durationMs: 12 },
+    { stage: 'context', durationMs: 3 },
+  ]);
+  expect(timing.gaps).toContain('An invalid runtime timing was excluded.');
+  expect(
+    tracetoonTimings(git, { root: '/work', branch: 'other', startedAt: start })
+      .entries,
+  ).toEqual([]);
+  const rows = operationSummary([
+    {
+      model: 'writer',
+      system: 'candidate',
+      toolTimings: timing.entries,
+      toolTimingGaps: timing.gaps,
+    },
+  ]);
+  expect(rows[0]).toMatchObject({
+    toolTimingCases: 1,
+    toolTimingGapCases: 1,
+    toolStages: { digest: { records: 1, totalMs: 12, medianMs: 12 } },
+  });
+});
 
 test('operational medians separate queue waits, unknown usage and cleanup warnings', () => {
   const summary = operationSummary([

@@ -208,6 +208,27 @@ export function operationSummary(metrics: Record<string, any>[]) {
       : null;
   };
   const groups = new Map<string, Record<string, any>[]>();
+  const stages = (items: Record<string, any>[]) => {
+    const entries = items.flatMap((i) => i.toolTimings ?? []) as {
+      stage: string;
+      durationMs: number;
+    }[];
+    return Object.fromEntries(
+      [...new Set(entries.map((e) => e.stage))].sort().map((stage) => {
+        const values = entries
+          .filter((e) => e.stage === stage)
+          .map((e) => e.durationMs);
+        return [
+          stage,
+          {
+            records: values.length,
+            totalMs: values.reduce((a, b) => a + b, 0),
+            medianMs: median(values),
+          },
+        ];
+      }),
+    );
+  };
   for (const item of metrics) {
     const key = `${item.model}/${item.system}`;
     groups.set(key, [...(groups.get(key) ?? []), item]);
@@ -222,6 +243,9 @@ export function operationSummary(metrics: Record<string, any>[]) {
     outputTokenMedian: median(items.map((i) => i.outputTokens)),
     writerErrors: items.filter((i) => i.writerOutcome?.isError).length,
     pendingCleanup: items.filter((i) => i.cleanup === 'pending').length,
+    toolTimingCases: items.filter((i) => i.toolTimings?.length).length,
+    toolTimingGapCases: items.filter((i) => i.toolTimingGaps?.length).length,
+    toolStages: stages(items),
   }));
 }
 
@@ -485,6 +509,8 @@ export async function compare(opts: CompareOptions): Promise<void> {
           writerOutcome: artifact.meta.writerOutcome,
           inputTokens: artifact.meta.inputTokens,
           outputTokens: artifact.meta.outputTokens,
+          toolTimings: artifact.meta.toolTimings,
+          toolTimingGaps: artifact.meta.toolTimingGaps,
           cleanup: existsSync(statusFile)
             ? json(statusFile).cleanup?.state
             : 'unknown',
@@ -607,6 +633,16 @@ export async function compare(opts: CompareOptions): Promise<void> {
         )
         .join('\n') +
       '\n\nThese are exploratory timings with one writer sample per case/model/system. Writer time includes model-service waits and observation overhead, and excludes the separate authentication queue.\n\n' +
+      '| Model | System | Runtime stage | Records | Sum of recorded ms | Median record ms |\n|---|---|---|---:|---:|---:|\n' +
+      summary.operations
+        .flatMap((r) =>
+          Object.entries(r.toolStages).map(
+            ([stage, t]) =>
+              `| ${r.model} | ${r.system} | ${stage} | ${t.records} | ${t.totalMs.toFixed(2)} | ${t.medianMs?.toFixed(2) ?? 'unknown'} |`,
+          ),
+        )
+        .join('\n') +
+      '\n\nRuntime stage timers are self-reported operational diagnostics, separate from neutral check evidence. Records may overlap and are not invocation counts; do not add nested stages into a pipeline total. Missing logs and excluded records are retained in toolTimingGaps.\n\n' +
       reports
         .map(
           (r) =>

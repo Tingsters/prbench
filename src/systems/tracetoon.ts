@@ -84,6 +84,33 @@ export function tracetoonDraft(gitDir: string, invocation?: { root: string; bran
   return candidates[0];
 }
 
+/** Retain self-reported stage timings before the sandbox is removed; unknown stays explicit. */
+export function tracetoonTimings(gitDir: string, invocation: { root: string; branch: string; startedAt: number }) {
+  const entries: { stage: string; durationMs: number }[] = [], gaps: string[] = [];
+  const runs = join(gitDir, 'tracetoon', 'runs');
+  if (existsSync(runs)) for (const dir of readdirSync(runs, { withFileTypes: true })) {
+    if (!dir.isDirectory() || !/^\d{8}-\d{6}(-\d+)?$/.test(dir.name)) continue;
+    const root = join(runs, dir.name), task = join(root, 'task.json');
+    if (!existsSync(task)) continue;
+    try {
+      const t = JSON.parse(readFileSync(task, 'utf8'));
+      if (t.root !== invocation.root || t.branch !== invocation.branch || !Number.isFinite(Date.parse(t.startedAt)) || Date.parse(t.startedAt) < invocation.startedAt) continue;
+      const file = join(root, 'timings.json');
+      if (!existsSync(file)) { gaps.push('A registered run has no internal timing log.'); continue; }
+      const timings = JSON.parse(readFileSync(file, 'utf8'));
+      if (!Array.isArray(timings)) throw new Error('Malformed timing log');
+      for (const timing of timings) {
+        if (!timing || typeof timing.stage !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(timing.stage) || typeof timing.durationMs !== 'number' || !Number.isFinite(timing.durationMs) || timing.durationMs < 0) {
+          gaps.push('An invalid runtime timing was excluded.'); continue;
+        }
+        entries.push({ stage: timing.stage, durationMs: timing.durationMs });
+      }
+    } catch { gaps.push('An internal timing log or its ownership could not be read.'); }
+  }
+  if (!entries.length) gaps.push('No invocation-owned runtime stage timings were available.');
+  return { entries, gaps: [...new Set(gaps)] };
+}
+
 export function tracetoonSystem(options: Partial<AgentOptions> = {}): System {
   const o = { ...DEFAULT_AGENT_OPTIONS, ...options };
   return {
@@ -125,7 +152,7 @@ export function tracetoonSystem(options: Partial<AgentOptions> = {}): System {
       } else {
         throw new Error(`tracetoon produced no PR draft (${describeRun(run)})`);
       }
-      return agentArtifact({
+      const artifact = agentArtifact({
         loaded,
         sandbox,
         system: 'tracetoon',
@@ -138,6 +165,10 @@ export function tracetoonSystem(options: Partial<AgentOptions> = {}): System {
         startedAt: started,
         notes,
       });
+      const timing = tracetoonTimings(sandbox.gitDir, { root: sandbox.repo, branch: sandbox.branch, startedAt: started });
+      artifact.meta.toolTimings = timing.entries;
+      artifact.meta.toolTimingGaps = timing.gaps;
+      return artifact;
     },
   };
 }

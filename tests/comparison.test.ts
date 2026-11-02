@@ -86,6 +86,14 @@ test('frozen comparison runs three systems, both orders, and resumes only matchi
       ),
     ).toBe(true);
     expect(summary.qualityGate.passed).toBe(true);
+    expect(
+      summary.operations
+        .filter((r: any) => r.system !== 'codex-native')
+        .every(
+          (r: any) =>
+            r.toolTimingCases === 1 && r.toolStages.digest.totalMs === 7,
+        ),
+    ).toBe(true);
     const before = readFileSync(log, 'utf8');
     await compare({ ...opts, resume: true });
     expect(readFileSync(log, 'utf8')).toBe(before);

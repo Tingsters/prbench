@@ -2,7 +2,7 @@ import { codexCommand } from '../agents/codexAuth.ts';
 import { reasoningEffort, runCodex } from '../agents/codex.ts';
 import { describeRun } from '../agents/claude.ts';
 import { agentArtifact, claudeVersion, DEFAULT_AGENT_OPTIONS, PR_PROMPT, replaySupport, type AgentOptions } from './agentShared.ts';
-import { installTracetoon, tracetoonDraft, type PinnedTracetoon } from './tracetoon.ts';
+import { installTracetoon, tracetoonDraft, tracetoonTimings, type PinnedTracetoon } from './tracetoon.ts';
 import type { System } from './types.ts';
 
 export const DEFAULT_CODEX_OPTIONS = {
@@ -42,13 +42,19 @@ export function codexSystem(withTracetoon: boolean, options: Partial<AgentOption
         if (draft.state && !['ready', 'published'].includes(draft.state)) notes.push(`Tracetoon task is ${draft.state}; retained its available draft.`);
       }
       run.stageTimings = { ...run.stageTimings, installationMs, collectionMs: Date.now() - collectionStart };
-      return agentArtifact({
+      const artifact = agentArtifact({
         loaded, sandbox, system: id, tool: tt ? 'tracetoon' : 'codex-native',
         toolVersion: tt?.version ?? claudeVersion(sandbox.env, codexCommand()),
         agent: 'codex', model: o.model, reasoningEffort: effort,
         title: pr?.title ?? draft!.title, body: pr?.title ? pr.body ?? '' : draft!.body,
         run, startedAt: started, notes,
       });
+      if (withTracetoon) {
+        const timing = tracetoonTimings(sandbox.gitDir, { root: sandbox.repo, branch: sandbox.branch, startedAt: invocationStartedAt });
+        artifact.meta.toolTimings = timing.entries;
+        artifact.meta.toolTimingGaps = timing.gaps;
+      }
+      return artifact;
     },
   };
 }

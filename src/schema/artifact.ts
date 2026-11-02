@@ -27,6 +27,9 @@ export interface ArtifactMeta {
   experimentId?: string;
   runtimeIdentity?: { version: string; buildId: string; sha256: string };
   stageTimings?: Record<string, number>;
+  /** Runtime-reported operational timers, never proof that a validation check passed. */
+  toolTimings?: { stage: string; durationMs: number }[];
+  toolTimingGaps?: string[];
   writerOutcome?: { exitCode: number; timedOut: boolean; isError: boolean; cleanupTerminated?: boolean };
   /** Anything that went wrong or was skipped while producing the artifact. */
   notes?: string[];
@@ -96,6 +99,15 @@ export function checkArtifact(value: unknown): Problems {
     }
     if (m.stageTimings !== undefined && c.object(m.stageTimings, 'meta.stageTimings'))
       for (const [k, v] of Object.entries(m.stageTimings)) c.number(v, `meta.stageTimings.${k}`, { min: 0 });
+    c.strings(m.toolTimingGaps, 'meta.toolTimingGaps', true);
+    if (m.toolTimings !== undefined && c.array(m.toolTimings, 'meta.toolTimings'))
+      (m.toolTimings as unknown[]).forEach((timing, i) => {
+        const path = `meta.toolTimings[${i}]`;
+        if (!c.object(timing, path)) return;
+        const t = timing as Record<string, unknown>;
+        c.string(t.stage, `${path}.stage`);
+        c.number(t.durationMs, `${path}.durationMs`, { min: 0 });
+      });
     if (m.writerOutcome !== undefined && c.object(m.writerOutcome, 'meta.writerOutcome')) {
       const outcome = m.writerOutcome as Record<string, unknown>;
       c.number(outcome.exitCode, 'meta.writerOutcome.exitCode');
