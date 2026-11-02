@@ -6,11 +6,11 @@
       "name": "prbench",
       "dependencies": {
         "commander": "^14.0.0",
+        "typescript": "^5.5.0",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
         "bun-types": "^1.1.0",
-        "typescript": "^5.5.0",
       },
     },
   },

@@ -5,6 +5,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync } from '
 import { join, relative } from 'node:path';
 import type { Sandbox } from '../run/sandbox.ts';
 import { VALIDATION_SCHEMA, type CommandEvidence, type TreeObservation, type ValidationEvidence } from '../schema/validation.ts';
+import { displaysCommand, staticExecutionContexts, type ExecutionContext } from './orchestration.ts';
 
 const hash = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
 const OUTPUT_LIMIT = 24_000;
@@ -127,6 +128,11 @@ export class ValidationCapture {
   private seen = new Set<string>();
   private malformed = 0;
   private outputHashes = new WeakMap<CommandEvidence, ReturnType<typeof createHash>>();
+  private streamThread?: string;
+  private sourceThreads = new Map<string, string>();
+  private pendingContexts = new Map<string, { start: number; contexts: ExecutionContext[] }>();
+  private contexts: (ExecutionContext & { start: number; end: number })[] = [];
+  private unknownContextWindows: { start: number; end: number }[] = [];
   constructor(private readonly options: {
     cwd: string; origin?: ValidationEvidence['origin']; redact?: (text: string) => string; observe?: () => TreeObservation | undefined;
   }) {}
@@ -140,6 +146,28 @@ export class ValidationCapture {
     let j: any;
     try { j = JSON.parse(line); } catch { this.malformed++; return; }
     if (!j || typeof j !== 'object' || Array.isArray(j)) { this.malformed++; return; }
+    if (live && j.type === 'thread.started' && typeof j.thread_id === 'string') this.streamThread ??= j.thread_id;
+    if (!live && j.type === 'session_meta' && typeof j.payload?.id === 'string') this.sourceThreads.set(source, j.payload.id);
+    if (!live && this.streamThread && this.sourceThreads.get(source) === this.streamThread && j.type === 'response_item') {
+      const p = j.payload ?? {}, key = `${source}:${p.call_id}`;
+      if (['custom_tool_call', 'function_call'].includes(p.type)) {
+        const input = p.arguments ?? p.input;
+        const orchestrated = /^(?:functions\.)?exec$/.test(p.name ?? '') && typeof input === 'string' && (p.type === 'custom_tool_call' || !/^\s*\{/.test(input));
+        const poll = /^(?:functions\.)?(?:wait|write_stdin)$/.test(p.name ?? '') && /(?:cell_id|session_id)/.test(String(input));
+        if (orchestrated || poll) {
+          this.pendingContexts.set(key, { start: Date.parse(j.timestamp), contexts: orchestrated ? staticExecutionContexts(input) : [] });
+          return; // JavaScript orchestration and polling are not shell executions.
+        }
+      } else if (['custom_tool_call_output', 'function_call_output'].includes(p.type) && this.pendingContexts.has(key)) {
+        const pending = this.pendingContexts.get(key)!;
+        this.pendingContexts.delete(key);
+        const end = Date.parse(j.timestamp);
+        if (Number.isFinite(pending.start) && Number.isFinite(end) && end >= pending.start)
+          if (pending.contexts.length && /^Script (?:completed|running)\b/.test(textOf(p.output).trimStart())) this.contexts.push(...pending.contexts.map(c => ({ ...c, start: pending.start, end })));
+          else this.unknownContextWindows.push({ start: pending.start, end });
+        return;
+      }
+    }
     if (j.type === 'assistant' && j.message?.content?.some?.((p: any) => ['Agent', 'Task'].includes(p.name))) {
       this.gaps.add('Delegated executions may have incomplete transcripts or unknown tested content.');
     }
@@ -194,6 +222,18 @@ export class ValidationCapture {
   finish(finalTree?: TreeObservation): ValidationEvidence {
     // Stream and persisted session formats may describe the same invocation.
     const unique = [...new Set(this.commands.values())];
+    for (const c of unique) if (c.cwd.startsWith('unknown') && c.startedAt) {
+      const started = Date.parse(c.startedAt);
+      if (this.unknownContextWindows.some(h => started >= h.start - 1000 && started <= h.end + 1000)) continue;
+      // A small ingestion delay is tolerated only when every matching explicit context agrees.
+      const candidates = this.contexts.filter(h => started >= h.start - 1000 && started <= h.end + 1000 && displaysCommand(c.command, h.command));
+      const directories = new Set(candidates.map(h => h.cwd));
+      const unambiguous = candidates.length === 1 && unique.filter(other => other.startedAt && Date.parse(other.startedAt) >= candidates[0]!.start - 1000 && Date.parse(other.startedAt) <= candidates[0]!.end + 1000 && displaysCommand(other.command, candidates[0]!.command)).length === 1;
+      if (directories.size === 1 && unambiguous) {
+        c.cwd = (this.options.redact ?? redactEvidence)([...directories][0]!);
+        c.cwdSource = 'recorded-tool-arguments';
+      }
+    }
     const commands: CommandEvidence[] = [];
     for (const c of unique) {
       const existing = commands.find((p) => p.command === c.command && p.outputSha256 === c.outputSha256 &&

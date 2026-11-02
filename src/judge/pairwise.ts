@@ -113,7 +113,9 @@ async function judgeOnce(
   }
   let lastError = '';
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const reply = await judge.ask(prompt);
+    let reply;
+    try { reply = await judge.ask(prompt); }
+    catch (error) { lastError = String(error); continue; }
     let parsed: unknown;
     try {
       parsed = extractJson(reply.text);

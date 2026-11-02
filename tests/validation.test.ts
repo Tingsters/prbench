@@ -228,6 +228,22 @@ describe('evidence-aware judging', () => {
     expect(normalizeBody('Validation: full suite failed; focused checks passed.')).toBe('Validation: full suite failed; focused checks passed.');
   });
 
+  test('judge transport failures retry within the same bounded schema-validation budget', async () => {
+    let calls = 0;
+    const args = { loaded: loadCase(EXAMPLE), facts, x: artifact('x'), y: artifact('y'), outDir: tempDir() };
+    const result = await judgePair({ ...args, judge: { id: 'flaky', family: 'test', ask: async () => {
+      if (++calls === 1) throw new Error('Missing structured output');
+      return { text: JSON.stringify(judgment()) };
+    } } });
+    expect(calls).toBe(3); // Failed AB, valid AB, valid BA.
+    expect(result.verdict).toBe('tie');
+    calls = 0;
+    await expect(judgePair({ ...args, outDir: tempDir(), judge: { id: 'unavailable', family: 'test', ask: async () => {
+      calls++; throw new Error('Missing structured output');
+    } } })).rejects.toThrow('Missing structured output');
+    expect(calls).toBe(2);
+  });
+
   test('fresh evidence follows both label orders and invalidates caches without changing the draft', async () => {
     const prompts: string[] = [], out = tempDir();
     const x = artifact('native', captured('native focused check: 2 pass'));

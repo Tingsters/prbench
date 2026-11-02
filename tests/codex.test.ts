@@ -194,3 +194,16 @@ test('dev-only judging excludes held-out artifacts and saves the selected scope'
   expect(pairs).toHaveLength(1); expect(pairs[0].case).toBe('development');
   expect(calls().slice(-2).some((call) => call.prompt.includes('DO NOT JUDGE THIS CASE'))).toBe(false);
 });
+
+test('judges retain the completed stream reply when the CLI output file is missing', async () => {
+  const reply = JSON.stringify({ retained: 'completed structured stream' });
+  env({ FAKE_CODEX_MODE: 'nothing', FAKE_CODEX_SKIP_OUTPUT_FILE: '1', FAKE_CODEX_FINAL_MESSAGE: reply });
+  try {
+    expect((await parseJudge('codex:gpt-6.1-sol@medium').ask('Synthetic diagnostic')).text).toBe(reply);
+    env({ FAKE_CODEX_FINAL_MESSAGE: '' });
+    await expect(parseJudge('codex:gpt-6.1-sol@medium').ask('Synthetic missing reply')).rejects.toThrow('no structured reply');
+    expect(existsSync(join(auth, 'prbench.lock'))).toBe(false);
+  } finally {
+    env({ FAKE_CODEX_SKIP_OUTPUT_FILE: '0', FAKE_CODEX_FINAL_MESSAGE: 'done' });
+  }
+});

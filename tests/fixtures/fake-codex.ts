@@ -40,6 +40,6 @@ if (mode === 'failed') {
   console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'simulated provider failure' } }));
   process.exit(1);
 }
-if (args.includes('-o') && process.env.FAKE_CODEX_JUDGMENT) writeFileSync(args[args.indexOf('-o') + 1]!, process.env.FAKE_CODEX_JUDGMENT);
-console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }));
+if (args.includes('-o') && process.env.FAKE_CODEX_JUDGMENT && process.env.FAKE_CODEX_SKIP_OUTPUT_FILE !== '1') writeFileSync(args[args.indexOf('-o') + 1]!, process.env.FAKE_CODEX_JUDGMENT);
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: process.env.FAKE_CODEX_FINAL_MESSAGE ?? 'done' } }));
 console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, cached_input_tokens: 60, output_tokens: 20 } }));

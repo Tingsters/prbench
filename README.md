@@ -45,6 +45,16 @@ medians alongside the neutral pipeline timings. Invalid or unavailable logs
 remain explicit gaps. Runtime timers are diagnostics, not validation evidence.
 Records may overlap and are not invocation counts; nested stages must not be
 added into a pipeline total. Use the neutral writer clock for elapsed execution.
+When Codex omits an execution directory, the collector can correlate an exact
+command and time window with explicit, statically resolved tool arguments in
+that writer's own rollout. It records this as `cwdSource`; ambiguous matches,
+dynamic code and other sessions remain unknown. Transcript code is never executed.
+This does not strengthen boundary fingerprints into atomic test attestations.
+
+Judges can retain a completed JSON stream reply when the CLI omits its output
+file. The same schema and evidence-reference checks still apply. Transport and
+format failures share a bounded two-attempt budget; saved judgments remain
+available for an exact-input resume after an unrecoverable failure.
 Execution content observations remain partial when
 the tool stream does not establish them; preparation never proves writer validation.
 

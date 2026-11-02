@@ -14,6 +14,7 @@ export interface CommandEvidence {
   source: string;
   command: string;
   cwd: string;
+  cwdSource?: 'recorded-tool-arguments';
   startedAt?: string;
   completedAt?: string;
   exitCode?: number;
@@ -70,6 +71,7 @@ export function checkValidation(value: unknown): Problems {
         ids.add(x.id);
       }
       for (const k of ['source', 'command', 'cwd']) c.string(x[k], `${p}.${k}`);
+      if (x.cwdSource !== undefined) c.oneOf(x.cwdSource, `${p}.cwdSource`, ['recorded-tool-arguments']);
       for (const k of ['startedAt', 'completedAt']) {
         if (x[k] !== undefined && c.string(x[k], `${p}.${k}`) && Number.isNaN(Date.parse(x[k] as string))) c.fail(`${p}.${k}`, 'expected timestamp');
       }
