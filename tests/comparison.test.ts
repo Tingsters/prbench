@@ -3,6 +3,7 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compare } from '../src/compare.ts';
 import { RUBRIC_KEYS } from '../src/judge/rubric.ts';
+import { artifactDigest } from '../src/schema/artifact.ts';
 import { cleanupTemps, copyExample, tempDir } from './helpers.ts';
 afterAll(cleanupTemps);
 
@@ -116,6 +117,21 @@ test('frozen comparison runs three systems, both orders, and resumes only matchi
       'isolation proof',
     );
     writeFileSync(proofPath, proof);
+    const artifactPath = join(opts.out, 'gpt-6.1-sol', 'artifacts', 'comparison-smoke', 'codex-native.json');
+    const artifact = JSON.parse(readFileSync(artifactPath, 'utf8'));
+    artifact.validation.commands.push({
+      id: 'V99', source: 'synthetic', command: 'cat <user>/.agents/skills/tracetoon/SKILL.md',
+      cwd: '<repo>', outcome: 'completed', exitCode: 0, output: '', truncated: false,
+    });
+    artifact.validation.coverage = 'partial';
+    writeFileSync(artifactPath, JSON.stringify(artifact));
+    writeFileSync(artifactPath.replace('.json', '.receipt.json'), JSON.stringify({
+      experiment: isolation.experiment, digest: artifactDigest(artifact),
+    }));
+    await expect(compare({ ...opts, resume: true })).rejects.toThrow('outside case inputs');
+    expect(readFileSync(log, 'utf8')).toBe(before);
+    const failure = JSON.parse(readFileSync(artifactPath.replace('.json', '.isolation-failure.json'), 'utf8'));
+    expect(failure.findings).toEqual([{ commandId: 'V99', kind: 'host-agent-state' }]);
     writeFileSync(join(candidate, 'SKILL.md'), '# Changed input');
     await expect(compare({ ...opts, resume: true })).rejects.toThrow(
       'inputs changed',

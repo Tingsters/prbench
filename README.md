@@ -23,6 +23,12 @@ stops after this check. Hash-verified isolation receipts are reused on resume.
 Codex runs suppress host skill discovery and remote plugins and explicitly
 disable global Tracetoon entries. These CLI feature flags are version-specific;
 an unavailable flag or an unrecognized catalogue fails before draft collection.
+Every writer receives the same workspace-scope instructions. After collection,
+the comparison audits its neutral command records for observable host agent
+configuration/skill reads, host ancestor instructions and outside case inputs.
+A violation retains the artifact for diagnosis and rejects the comparison before
+judging or issuing its reuse receipt. This complements catalogue probes; neither
+the prompt nor the audit turns the workspace into a filesystem security boundary.
 
 `--preparation <file>` accepts an explicit JSON profile with a `cases` object.
 Each case may have `commands` (nonempty argv arrays, run in the checkout) and

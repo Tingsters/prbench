@@ -14,6 +14,7 @@ import { codexSystem } from './systems/codex.ts';
 import { PR_PROMPT } from './systems/agentShared.ts';
 import { runCase } from './run/runner.ts';
 import { verifyComparisonIsolation } from './run/isolation.ts';
+import { hostAgentStateFindings } from './run/agentScope.ts';
 import type { Sandbox } from './run/sandbox.ts';
 import {
   artifactDigest,
@@ -43,6 +44,13 @@ const save = (file: string, value: unknown) => {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 };
+
+function assertWriterScope(artifact: PRArtifact, file: string, experiment: string) {
+  const findings = hostAgentStateFindings(artifact.validation?.commands ?? []);
+  if (!findings.length) return;
+  save(file.replace(/\.json$/, '.isolation-failure.json'), { experiment, findings });
+  throw new Error(`Host agent state or outside case inputs were accessed in ${findings.map(f => f.commandId).join(', ')}. Artifact retained, comparison rejected: ${file}`);
+}
 
 export function directoryDigest(root: string): string {
   const h = createHash('sha256');
@@ -464,6 +472,8 @@ export async function compare(opts: CompareOptions): Promise<void> {
         const skill = join(root, 'inputs', which),
           runtime = join(skill, 'bin', manifest[which].runtimeName);
         if (existsSync(file)) {
+          if (existsSync(file.replace(/\.json$/, '.isolation-failure.json')))
+            throw new Error('Saved artifact failed the workspace scope audit; preserve it and use a corrected fresh experiment.');
           if (!opts.resume)
             throw new Error('Artifact already exists without --resume.');
           artifact = json(file);
@@ -478,6 +488,7 @@ export async function compare(opts: CompareOptions): Promise<void> {
             artifact.meta.experimentId !== manifest.id
           )
             throw new Error('Saved artifact identity is invalid.');
+          assertWriterScope(artifact, file, manifest.id);
         } else {
           console.log(`write ${model} / ${l.case.id} / ${system}`);
           if (system !== 'codex-native')
@@ -508,6 +519,7 @@ export async function compare(opts: CompareOptions): Promise<void> {
             artifact.meta.runtimeIdentity = manifest[which].identity;
           }
           save(file, artifact);
+          assertWriterScope(artifact, file, manifest.id);
           save(join(out, l.case.id, `${system}.receipt.json`), {
             experiment: manifest.id,
             digest: artifactDigest(artifact),
