@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, renameSync, realpathSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import {
   directoryDigest,
   assertResume,
@@ -135,6 +135,33 @@ test('a cleanup failure preserves a valid artifact and can be retried by its own
   expect(cleanupExperiment(out)).toEqual({ removed: 1, pending: 0 });
   expect(existsSync(status.cleanup.owner.root)).toBe(false);
   expect(existsSync(result.path!)).toBe(true);
+});
+
+test('cleanup remains recoverable after a partial removal deletes its marker', () => {
+  const root = tempDir(), owner = ownSandbox(root);
+  writeFileSync(join(root, 'partial'), 'temporary');
+  expect(() => cleanupOwned(owner, () => {
+    unlinkSync(join(root, '.prbench-owner.json'));
+    unlinkSync(join(root, 'partial'));
+    throw new Error('EBUSY after partial deletion');
+  })).toThrow('EBUSY after partial deletion');
+  expect(JSON.parse(readFileSync(join(root, '.prbench-owner.json'), 'utf8'))).toEqual(owner);
+  cleanupOwned(owner);
+  expect(existsSync(root)).toBe(false);
+});
+
+test('failed cleanup does not adopt a replacement directory', () => {
+  const parent = realpathSync(tempDir()), root = join(parent, 'owned'), moved = join(parent, 'previous');
+  mkdirSync(root);
+  const owner = ownSandbox(root);
+  expect(() => cleanupOwned(owner, () => {
+    if (dirname(root) !== parent || dirname(moved) !== parent) throw new Error('Test move escaped its parent');
+    renameSync(root, moved);
+    mkdirSync(root);
+    throw new Error('replaced root');
+  })).toThrow('replaced root');
+  expect(existsSync(join(root, '.prbench-owner.json'))).toBe(false);
+  expect(existsSync(join(moved, '.prbench-owner.json'))).toBe(true);
 });
 
 test('cleanup refuses a forged token and leaves unrelated directories intact', () => {

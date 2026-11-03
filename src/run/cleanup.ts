@@ -50,7 +50,24 @@ export function cleanupOwned(
     actual.parent !== owner.parent
   )
     throw new Error('Sandbox ownership does not match; refusing cleanup.');
-  dispose();
+  const identity = lstatSync(owner.root);
+  try {
+    dispose();
+  } catch (error) {
+    // Recursive removal may delete the marker before a locked child prevents
+    // removing the root. Restore recovery only for the same physical directory;
+    // never adopt a replacement root or overwrite another ownership marker.
+    try {
+      const remaining = lstatSync(owner.root);
+      if (remaining.dev === identity.dev && remaining.ino === identity.ino &&
+          remaining.birthtimeMs === identity.birthtimeMs &&
+          resolve(owner.root) === realpathSync(owner.root) &&
+          realpathSync(dirname(owner.root)) === owner.parent) {
+        writeFileSync(join(owner.root, '.prbench-owner.json'), JSON.stringify(owner), { flag: 'wx' });
+      }
+    } catch { /* Preserve the original disposal error and refuse uncertain recovery. */ }
+    throw error;
+  }
 }
 export function cleanupExperiment(dir: string): {
   removed: number;
