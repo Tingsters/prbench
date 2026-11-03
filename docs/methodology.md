@@ -94,6 +94,12 @@ the retained source rather than assuming a prior digest's truncation is a source
 limit. Correct development ground truth for all systems in a new frozen cohort,
 preserving the old inputs and results.
 
+Retained user requests and decisions before the command-observation window remain
+visible to judges as earlier context, with current requests prioritized when the
+excerpt is full. Older command results remain outside that window. Earlier
+context does not establish why a particular later fix was made. Provider metadata
+and compaction recaps are not labeled as user requests.
+
 ## Metrics still to build
 
 1. **Accuracy checker.** Independently validate extracted claims against code and execution evidence, classify mismatches with Gong et al.'s taxonomy, and validate against their labelled PRs. Until then, accuracy comes from model judgments under the v4 evidence contract; synthetic regression tests do not establish semantic judge reliability.

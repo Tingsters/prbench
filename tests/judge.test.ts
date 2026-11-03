@@ -404,9 +404,13 @@ describe('session evidence', () => {
     expect(e).not.toContain('Read'); // file reads are left out
   });
 
-  test('starts shortly before the base commit', () => {
+  test('labels earlier user context while excluding earlier commands and edits', () => {
     const { dir } = copyExample('later-base', (c) => (c.repo.baseTime = '2026-01-07T00:00:00Z'));
-    expect(sessionEvidence(loadCase(dir))).toBe('(no recorded sessions)');
+    const e = sessionEvidence(loadCase(dir));
+    expect(e).toContain('EARLIER USER CONTEXT: greet()');
+    expect(e).toContain('do not establish a causal request for each later fix');
+    expect(e).not.toContain('$ bun test');
+    expect(e).not.toContain('Files edited');
   });
 
   test('reads Codex rollouts', () => {
@@ -476,6 +480,40 @@ describe('session evidence', () => {
     expect(e).toContain('Which route?');
     expect(e).toContain('-> Selected Local');
     expect(e).not.toContain('$ ');
+  });
+
+  test('prioritizes current requests over earlier context when the excerpt is full', () => {
+    const { dir } = copyExample('context-priority', c => {
+      c.repo.baseTime = '2026-01-06T10:00:00Z';
+      c.sessions = [{ agent: 'claude-code', file: 'context.jsonl', cwd: '/work/greet' }];
+    });
+    const previous = 'Previous task ' + 'x'.repeat(120);
+    writeFileSync(join(dir, 'context.jsonl'), [
+      { type: 'user', timestamp: '2026-01-06T09:30:00Z', message: { content: previous } },
+      { type: 'assistant', timestamp: '2026-01-06T09:31:00Z', message: { content: [{ type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: { questions: [{ question: 'Earlier choice?' }] } }] } },
+      { type: 'user', timestamp: '2026-01-06T09:32:00Z', message: { content: [{ type: 'tool_result', tool_use_id: 'q', content: 'Selected Local' }] } },
+      { type: 'user', timestamp: '2026-01-06T10:01:00Z', message: { content: 'Current scoped request ' + 'y'.repeat(60) } },
+    ].map(l => JSON.stringify(l)).join('\n'));
+    const loaded = loadCase(dir);
+    const full = sessionEvidence(loaded);
+    expect(full).toContain('EARLIER USER CONTEXT: ' + previous);
+    expect(full).toContain('EARLIER RECORDED Q&A:');
+    const bounded = sessionEvidence(loaded, 550);
+    expect(bounded).toContain('USER: Current scoped request');
+    expect(bounded).not.toContain(previous);
+  });
+
+  test('does not label compaction recaps or provider metadata as user requests', () => {
+    const content = 'This session is being continued from a previous conversation that ran out of context. Summary: user asked for everything.';
+    const lines = [
+      { type: 'user', isCompactSummary: true, message: { content: 'A recap with no prefix' } },
+      { type: 'user', message: { content } },
+      { type: 'user', isMeta: true, message: { content: 'Injected setup' } },
+      { type: 'user', message: { content: 'Actual request' } },
+    ].map(x => JSON.stringify({ timestamp: '2026-01-01T10:00:00Z', ...x })).join('\n');
+    expect(sessionItems(lines, 'claude-code').map(i => i.text)).toEqual(['Actual request']);
+    const codex = JSON.stringify({ type: 'response_item', timestamp: '2026-01-01T10:00:00Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: content }] } });
+    expect(sessionItems(codex, 'codex')).toEqual([]);
   });
 
   test('the prompt carries the evidence and the preparation note', () => {

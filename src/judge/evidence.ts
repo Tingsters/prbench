@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { redactEvidence } from '../agents/validation.ts';
+import { hasUserInput } from '../import/session.ts';
 import type { CaseSession, LoadedCase } from '../schema/case.ts';
 
 export interface EvidenceItem {
@@ -17,6 +18,8 @@ export interface EvidenceItem {
   result?: string;
   /** Higher is kept first when the budget is tight. */
   weight: number;
+  /** Retained user context preceding the command-observation window. */
+  earlierContext?: boolean;
 }
 
 const KEY_COMMAND = /\b(test|tests|tsc|typecheck|lint|build|bundle|prettier|eslint|pytest|cargo|go test|commit|push|merge|rebase|pr create|release|tag)\b/i;
@@ -85,6 +88,7 @@ function claudeItems(lines: Record<string, any>[]): EvidenceItem[] {
     const content = j.message?.content;
     if (j.type === 'user') {
       if (typeof content === 'string' || (Array.isArray(content) && content.every((p: any) => p?.type === 'text'))) {
+        if (!hasUserInput(j)) continue;
         const text = textOf(content);
         const item = userItem(text, j.timestamp);
         if (item) items.push(item);
@@ -130,6 +134,7 @@ function codexItems(lines: Record<string, any>[]): EvidenceItem[] {
     const p = j.payload ?? {};
     if (j.type !== 'response_item') continue;
     if (p.type === 'message' && p.role === 'user') {
+      if (!hasUserInput(j)) continue;
       const text = textOf(p.content);
       const item = userItem(text, j.timestamp);
       if (item) items.push(item);
@@ -174,8 +179,8 @@ export function sessionItems(text: string, agent: CaseSession['agent']): Evidenc
 
 function render(item: EvidenceItem): string {
   const time = item.at ? item.at.slice(11, 16) : '--:--';
-  if (item.kind === 'user') return `[${time}] USER: ${item.text}`;
-  if (item.kind === 'decision') return `[${time}] RECORDED Q&A: ${item.text}${item.result ? `\n        -> ${item.result}` : ''}`;
+  if (item.kind === 'user') return `[${time}] ${item.earlierContext ? 'EARLIER USER CONTEXT' : 'USER'}: ${item.text}`;
+  if (item.kind === 'decision') return `[${time}] ${item.earlierContext ? 'EARLIER ' : ''}RECORDED Q&A: ${item.text}${item.result ? `\n        -> ${item.result}` : ''}`;
   return `[${time}] $ ${item.text}${item.result ? `\n        -> ${item.result}` : ''}`;
 }
 
@@ -185,22 +190,28 @@ function render(item: EvidenceItem): string {
  * commands, in time order; edited files are listed once at the end.
  */
 export function sessionEvidence(loaded: LoadedCase, budget = 24_000): string {
-  // Slices start an hour before the base commit, which mostly covers the
-  // previous change; judges see the work from just before the base on.
+  // Older commands mostly cover the previous change. Retain user context the
+  // writers can see, labeling its earlier scope rather than hiding it.
   const since = loaded.case.repo.baseTime ? Date.parse(loaded.case.repo.baseTime) - 10 * 60_000 : -Infinity;
   const all: EvidenceItem[] = [];
   for (const s of loaded.case.sessions ?? []) {
     const items = sessionItems(readFileSync(join(loaded.dir, s.file), 'utf8'), s.agent);
-    all.push(...items.filter((i) => !(Date.parse(i.at) < since)));
+    for (const item of items) {
+      if (!(Date.parse(item.at) < since)) all.push(item);
+      else if (item.kind === 'user' || item.kind === 'decision') all.push({ ...item, earlierContext: true });
+    }
   }
   if (all.length === 0) return '(no recorded sessions)';
   const edits = [...new Set(all.filter((i) => i.kind === 'edit').map((i) => i.text))];
   const editLine = edits.length ? `Files edited in the sessions: ${edits.slice(0, 60).join(', ')}${edits.length > 60 ? ', …' : ''}` : '';
   const timeline = all.filter((i) => i.kind !== 'edit').map((i, index) => ({ i, index, text: `[S${index + 1}] ${render(i)}` }));
-  let room = budget - editLine.length - 200;
+  const contextNote = all.some(i => i.earlierContext)
+    ? 'EARLIER entries record retained user context before the command-observation window. They do not establish a causal request for each later fix.' : '';
+  let room = budget - editLine.length - contextNote.length - 200;
   const keep = new Set<number>();
+  const priority = [...timeline].sort((a, b) => Number(!!a.i.earlierContext) - Number(!!b.i.earlierContext));
   for (const weight of [3, 2, 1]) {
-    for (const t of timeline) {
+    for (const t of priority) {
       if (t.i.weight !== weight || keep.has(t.index)) continue;
       if (t.text.length + 1 > room) continue;
       keep.add(t.index);
@@ -209,5 +220,5 @@ export function sessionEvidence(loaded: LoadedCase, budget = 24_000): string {
   }
   const shown = timeline.filter((t) => keep.has(t.index)).map((t) => t.text);
   const omitted = timeline.length - shown.length;
-  return [...shown, ...(omitted ? [`(${omitted} less important entries omitted for length)`] : []), editLine].filter(Boolean).join('\n');
+  return [contextNote, ...shown, ...(omitted ? [`(${omitted} less important entries omitted for length)`] : []), editLine].filter(Boolean).join('\n');
 }
