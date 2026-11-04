@@ -1,4 +1,4 @@
-Current comparisons use rubric v5 and comparison manifest v2. Rubric v5 retains v4's neutral evidence contract and adds clause-level fallback and ownership-pointer audits. Historical versions below remain historical; do not pool them with v5. Confirmation predeclares three writer replicates and clusters uncertainty by case. See [evaluation reliability](evaluation-round3.md) and the README's comparison-v2 commands.
+Current comparisons use rubric v6 and comparison manifest v2. Rubric v6 retains the neutral evidence contract and clause-level fallback and ownership-pointer audits, and clarifies ordinary-language scope entailment. Historical versions below remain historical; do not pool them with v6. Confirmation predeclares three writer replicates and clusters uncertainty by case. See [evaluation reliability](evaluation-round3.md) and the README's comparison-v2 commands.
 
 # Methodology
 

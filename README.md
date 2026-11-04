@@ -60,7 +60,8 @@ This does not strengthen boundary fingerprints into atomic test attestations.
 
 Judges can retain a completed JSON stream reply when the CLI omits its output
 file. The same schema and evidence-reference checks still apply. Transport and
-format failures share a bounded two-attempt budget; saved judgments remain
+format failures share a bounded three-attempt budget, including at most one
+format-correction request; saved judgments remain
 available for an exact-input resume after an unrecoverable failure.
 Execution content observations remain partial when
 the tool stream does not establish them; preparation never proves writer validation.
