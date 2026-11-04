@@ -9,6 +9,7 @@ import {
   readlinkSync,
 } from "node:fs";
 import { join, relative } from "node:path";
+import { canonicalCheck, checkExecution } from "./validationCheck.ts";
 import type { Sandbox } from "../run/sandbox.ts";
 import {
   VALIDATION_SCHEMA,
@@ -306,6 +307,7 @@ export class ValidationCapture {
   constructor(
     private readonly options: {
       cwd: string;
+      repo?: string;
       origin?: ValidationEvidence["origin"];
       redact?: (text: string) => string;
       observe?: () => TreeObservation | undefined;
@@ -558,7 +560,25 @@ export class ValidationCapture {
           p.outputSha256 === c.outputSha256 &&
           p.startedAt === c.startedAt,
       );
-      if (!existing) commands.push({ ...c, id: `V${commands.length + 1}` });
+      if (!existing) {
+        const normalized = canonicalCheck(
+          this.rawCommands.get(c) ?? c.command,
+          c.cwd,
+          this.options.repo,
+        );
+        const check = normalized
+          ? checkExecution(normalized, c.output)
+          : undefined;
+        if (check?.argv)
+          check.argv = check.argv.map((a) =>
+            (this.options.redact ?? redactEvidence)(a),
+          );
+        commands.push({
+          ...c,
+          id: `V${commands.length + 1}`,
+          ...(check ? { check } : {}),
+        });
+      }
     }
     if (this.malformed)
       this.gaps.add(
@@ -656,6 +676,7 @@ export function startValidationCapture(
     .map(([, v]) => v!);
   const capture = new ValidationCapture({
     cwd: "<repo>",
+    repo: sandbox.repo,
     observe: () => observeTree(sandbox.repo),
     redact: (s) => redactEvidence(s, paths, secrets),
   });

@@ -13,6 +13,7 @@ export const PR_PROMPT =
   "The work on this branch is done. Open a pull request for it. " +
   "You're running unattended: nobody can answer questions, so don't stop to ask. " +
   "If something can't be done in this environment, note it and carry on. " +
+  "Output silence alone does not establish a hung check. Let started checks finish unless a configured timeout or clear failure requires interruption; record interrupted checks as incomplete. " +
   "Work only in the supplied checkout, its supplied sibling fixtures, and the isolated agent homes. " +
   "The workspace root is the parent of the environment HOME directory. " +
   "Do not inspect host-user directories or search for ancestor instructions above that workspace. " +

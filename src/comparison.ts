@@ -65,6 +65,7 @@ import {
   type ComparisonReport,
 } from "./gates.ts";
 import { performanceReport, type WriterMetric } from "./performance.ts";
+import { performanceEvidence } from "./validationWork.ts";
 import { exec, git } from "./util/exec.ts";
 import { redactEvidence } from "./agents/validation.ts";
 import { setCancellationSignal } from "./run/cancellation.ts";
@@ -353,6 +354,7 @@ export function rebuildComparison(
             : {};
           metrics.push({
             ...artifact.meta,
+            ...performanceEvidence(artifact),
             model,
             case: l.case.id,
             system,

@@ -26,6 +26,8 @@ import { compare, type CompareOptions } from "./compare.ts";
 import { cleanupExperiment } from "./run/cleanup.ts";
 import { experimentStatus } from "./run/status.ts";
 import { preflight } from "./run/preflight.ts";
+import { calibrateScope } from "./calibration.ts";
+import { admission } from "./admission.ts";
 
 const program = new Command("prbench")
   .version(version)
@@ -52,6 +54,55 @@ const list = (s: string) =>
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
+
+program
+  .command("calibrate-scope")
+  .description(
+    "Run fixed scope examples and optional retained development controls without writer calls",
+  )
+  .requiredOption("--out <dir>", "diagnostic output directory")
+  .option("--historical <dir>", "retained historical calibration directory")
+  .option(
+    "--disputed-screen <dir>",
+    "retained four-draft writer screen; paired with --historical",
+  )
+  .option("--plan", "describe fixed calls without launching judges")
+  .option("--resume", "resume exact matching saved judgments")
+  .option("--recover-lock", "recover only an owned exited controller")
+  .action(async (opts) => {
+    const result = await calibrateScope(opts);
+    process.exitCode = result.exitCode;
+    if (opts.plan) console.log(JSON.stringify(result, null, 2));
+  });
+
+program
+  .command("admission")
+  .description(
+    "Run the fixed four-draft candidate admission screen after full scope calibration",
+  )
+  .requiredOption("--out <dir>", "admission output directory")
+  .requiredOption(
+    "--candidate-skill <dir>",
+    "candidate skill and provenance-bound native runtime",
+  )
+  .requiredOption(
+    "--cases <dir>",
+    "development case root containing pr8 and pr9",
+  )
+  .requiredOption("--preparation <file>", "pinned preparation profile")
+  .requiredOption("--calibration <dir>", "passing full calibration directory")
+  .requiredOption(
+    "--controls <dir>",
+    "retained calibration inputs containing corrected controls",
+  )
+  .option("--plan", "describe fixed calls without running models")
+  .option("--resume", "resume exact matching saved generations and judgments")
+  .option("--recover-lock", "recover only an owned exited controller")
+  .action(async (opts) => {
+    const result = await admission(opts);
+    process.exitCode = result.exitCode;
+    console.log(JSON.stringify(result, null, 2));
+  });
 
 program
   .command("compare")

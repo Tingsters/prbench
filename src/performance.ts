@@ -1,5 +1,9 @@
 import { bootstrapMeanCI, mean } from "./stats.ts";
-export interface WriterMetric {
+import {
+  compareValidationWork,
+  type ValidationWork,
+} from "./validationWork.ts";
+export interface WriterMetric extends ValidationWork {
   model: string;
   case: string;
   system: string;
@@ -33,6 +37,23 @@ export function performanceReport(
     baselineTokens?: number;
     candidateTokens?: number;
   }[] = [];
+  const validationComparability = rows
+    .filter((r) => r.system === "tracetoon-candidate")
+    .map((candidate) => ({
+      case: candidate.case,
+      model: candidate.model,
+      replicate: candidate.replicate,
+      ...compareValidationWork(
+        rows.find(
+          (r) =>
+            r.case === candidate.case &&
+            r.model === candidate.model &&
+            r.replicate === candidate.replicate &&
+            r.system === "tracetoon-baseline",
+        ),
+        candidate,
+      ),
+    }));
   for (const candidate of rows.filter(
     (r) => r.system === "tracetoon-candidate",
   )) {
@@ -125,8 +146,13 @@ export function performanceReport(
       workEvidence.receiptReuses +
       workEvidence.unchangedWritesAvoided >
     0;
+  const validationComparable =
+    validationComparability.length === expectedPairs &&
+    validationComparability.every((p) => p.status === "matched");
   const unknown =
     !complete ||
+    validationComparability.length !== expectedPairs ||
+    validationComparability.some((p) => p.status !== "matched") ||
     models.some(
       (m) => !m.allTokensRecorded || m.medianPairedDeltaMs === null,
     ) ||
@@ -134,8 +160,16 @@ export function performanceReport(
     ci[1]! >= 1 ||
     (requireWorkEvidence && !workObserved);
   return {
-    schema: "prbench.performance/v1",
-    status: failures.length ? "failed" : unknown ? "inconclusive" : "passed",
+    schema: "prbench.performance/v2",
+    validationComparability,
+    validationComparable,
+    status: !validationComparable
+      ? "inconclusive"
+      : failures.length
+        ? "failed"
+        : unknown
+          ? "inconclusive"
+          : "passed",
     passed: !failures.length && !unknown,
     failures,
     pairs: pairs.length,
@@ -149,6 +183,7 @@ export function performanceReport(
       "Case-clustered percentile bootstrap; repeats, models and judges are not independent cases.",
       "Service waits and observation overhead are included in writer wall time.",
       "CLI token counts are not USD cost.",
+      "Noncomparable validation leaves timing and token differences descriptive; it establishes neither a gain nor a regression.",
     ],
   };
 }

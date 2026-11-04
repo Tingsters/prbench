@@ -142,6 +142,8 @@ export const JUDGMENT_SCHEMA = {
 };
 
 export interface PromptInput {
+  /** Exact clauses selected for assessment; never expected statuses or rationales. */
+  assessmentTargets?: Partial<Record<"A" | "B", string[]>>;
   caseTitle: string;
   facts: Facts;
   commits: string[];
@@ -185,6 +187,12 @@ function numbered(prefix: string, items: string[]): string {
 }
 
 export function buildPrompt(input: PromptInput): string {
+  for (const label of ["A", "B"] as const)
+    for (const claim of input.assessmentTargets?.[label] ?? [])
+      if (!(label === "A" ? input.a : input.b).body.includes(claim))
+        throw new Error(
+          `Selected ${label} assessment clause is absent from the description.`,
+        );
   const budget = input.diffBudget ?? 60_000;
   const diff =
     input.diff.length > budget
@@ -270,6 +278,7 @@ ${input.b.body}
 B>>>
 
 # How to judge
+${input.assessmentTargets ? `Explicitly assess these selected clauses, quoting each exactly; no expected answer is supplied: ${JSON.stringify(input.assessmentTargets)}\n` : ""}
 For each description, list:
 - claimAssessments: assess every validation claim and every other disputed claim. Each entry has claim (quote the exact statement), status, evidenceRefs, and reason. Status is supported (positive evidence), contradicted (specific evidence conflicts at the same relevant time/content/environment), unsupported (an overclaim broader than the evidence, such as a universal guarantee from a narrow test), or unverifiable (missing/incomplete evidence prevents assessment). Cite visible reference ids: C1/X1/U1/T1, D, K1, S1, A.V1 or B.V1. Use only this description's fresh references and shared historical references. Supported, contradicted and unsupported entries require at least one reference; unverifiable entries explain the evidence gap and may have no references. Distinguish focused checks from a full suite, and historical passes from final-content validation. Changed or unknown tested content cannot establish a pass on final content. Contradiction establishes an error, not intent; never infer fabrication from absent records.
 - factualErrors: exact claim strings from contradicted assessments only.
@@ -291,6 +300,7 @@ Reply with JSON only, matching this shape:
 export function checkJudgment(
   value: unknown,
   refs?: { A: Set<string>; B: Set<string> },
+  targets?: Partial<Record<"A" | "B", string[]>>,
 ): string[] {
   const problems: string[] = [];
   const v = value as Record<string, any>;
@@ -392,6 +402,11 @@ export function checkJudgment(
         )
           problems.push(`${label}.${k}: must match ${status} assessments`);
       }
+      for (const claim of targets?.[label as "A" | "B"] ?? [])
+        if (!assessed.has(claim))
+          problems.push(
+            `${label}.claimAssessments: selected clause missing: ${claim}`,
+          );
     }
     if (!s.rubric || typeof s.rubric !== "object")
       problems.push(`${label}.rubric: missing`);

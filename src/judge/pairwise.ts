@@ -83,8 +83,10 @@ export function promptFor(
   a: PRArtifact,
   b: PRArtifact,
   evidence?: string,
+  assessmentTargets?: Partial<Record<"A" | "B", string[]>>,
 ): string {
   return buildPrompt({
+    assessmentTargets,
     caseTitle,
     facts,
     commits: first.commits.map((c) => c.message),
@@ -163,9 +165,14 @@ async function judgeOnce(
   >,
   path: string,
   force: boolean,
-  refs: { A: Set<string>; B: Set<string> },
+  refs: {
+    A: Set<string>;
+    B: Set<string>;
+    targets?: Partial<Record<"A" | "B", string[]>>;
+  },
   controls?: JudgeControls,
 ): Promise<StoredJudgment> {
+  const validate = (value: unknown) => checkJudgment(value, refs, refs.targets);
   const promptSha = sha(prompt);
   const key = stageKey("judge", {
     contract: controls?.contract,
@@ -192,14 +199,14 @@ async function judgeOnce(
     if (
       cached.rubricVersion === RUBRIC_VERSION &&
       cached.promptSha === promptSha &&
-      !checkJudgment(cached.judgment, refs).length
+      !validate(cached.judgment).length
     ) {
       event("reused");
       return cached;
     }
   }
   const cached = !force && controls?.cache?.get<StoredJudgment>("judge", key);
-  if (cached && !checkJudgment(cached.judgment, refs).length) {
+  if (cached && !validate(cached.judgment).length) {
     atomicJson(path, cached);
     event("reused");
     return cached;
@@ -232,7 +239,7 @@ async function judgeOnce(
       if (
         stored.promptSha !== promptSha ||
         stored.rubricVersion !== RUBRIC_VERSION ||
-        checkJudgment(stored.judgment, refs).length
+        validate(stored.judgment).length
       )
         throw new Error("Accepted judge attempt failed integrity validation.");
       atomicJson(path, stored);
@@ -248,7 +255,7 @@ async function judgeOnce(
       const previous = JSON.parse(readFileSync(last, "utf8"));
       if (!force && previous.text && !previous.problems?.length) {
         const parsed = extractJson(previous.text);
-        if (!checkJudgment(parsed, refs).length) {
+        if (!validate(parsed).length) {
           const stored: StoredJudgment = {
             rubricVersion: RUBRIC_VERSION,
             promptSha,
@@ -343,7 +350,7 @@ async function judgeOnce(
     let problems: string[];
     try {
       parsed = extractJson(reply.text);
-      problems = checkJudgment(parsed, refs);
+      problems = validate(parsed);
     } catch (error) {
       problems = [String(error)];
     }
@@ -408,6 +415,7 @@ export async function judgePair(opts: {
   outDir: string;
   force?: boolean;
   controls?: JudgeControls;
+  requiredClaims?: Record<string, string[]>;
 }): Promise<PairResult> {
   const { loaded, facts, x, y, judge, outDir } = opts;
   const c = loaded.case;
@@ -423,6 +431,12 @@ export async function judgePair(opts: {
     );
   const run = (order: Order) => {
     const [a, b] = order === "ab" ? [x, y] : [y, x];
+    const targets = opts.requiredClaims
+      ? {
+          A: opts.requiredClaims[a.system] ?? [],
+          B: opts.requiredClaims[b.system] ?? [],
+        }
+      : undefined;
     const original = evidenceFor(loaded);
     const shared = [
       "D",
@@ -441,11 +455,11 @@ export async function judgePair(opts: {
       ]);
     return judgeOnce(
       judge,
-      promptFor(c.title, facts, x, a, b, original),
+      promptFor(c.title, facts, x, a, b, original, targets),
       { case: c.id, order, labels: { A: a.system, B: b.system } },
       judgmentPath(outDir, c.id, judge.id, x.system, y.system, order),
       opts.force ?? false,
-      { A: references(a, "A"), B: references(b, "B") },
+      { A: references(a, "A"), B: references(b, "B"), targets },
       opts.controls,
     );
   };

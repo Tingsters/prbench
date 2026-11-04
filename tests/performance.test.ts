@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { performanceReport, type WriterMetric } from "../src/performance.ts";
+import { completedWork } from "./fixtures/validation-work.ts";
 const rows = (ratio: number) =>
   ["one", "two", "three"].flatMap((id, i) =>
     ["sol", "terra"].flatMap((model) =>
       [1, 2, 3].flatMap((replicate) => [
         {
+          ...completedWork(),
           case: id,
           model,
           replicate,
@@ -13,6 +15,7 @@ const rows = (ratio: number) =>
           inputTokens: 100,
         },
         {
+          ...completedWork(),
           case: id,
           model,
           replicate,
@@ -37,4 +40,14 @@ test("performance clusters repeats by case and requires paired time and token ga
     r.system === "tracetoon-candidate" ? { ...r, inputTokens: 110 } : r,
   );
   expect(performanceReport(increased, 18).status).toBe("failed");
+  const interrupted = rows(0.5);
+  interrupted.find(
+    (r) => r.system === "tracetoon-candidate",
+  )!.validation!.commands[0]!.outcome = "interrupted";
+  expect(performanceReport(interrupted, 18).status).toBe("inconclusive");
+  const slowerInterrupted = rows(1.2);
+  slowerInterrupted.find(
+    (r) => r.system === "tracetoon-candidate",
+  )!.validation!.commands[0]!.outcome = "interrupted";
+  expect(performanceReport(slowerInterrupted, 18).status).toBe("inconclusive");
 });
