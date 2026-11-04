@@ -94,5 +94,12 @@ passed. Type checking and whitespace checks passed. The synthetic admission
 test collected exactly four drafts and 16 orders, then resumed with no new
 writer or judge calls. These test doubles make no live model requests.
 
-The actual calibration outcome will be recorded here after the fixed run.
-Private cases and raw model outputs stay ignored.
+The fixed live calibration passed all 28 orders under rubric v6, with zero
+writer calls, mismatches, unresolved findings, additional findings, preference
+flips, retries, format repairs or pending cleanup. The checksummed report is
+experiment `d4fb1a66404a8ad44036b79a67f913efbdb6dd8cd9f4c37d5a42c0481b6e3062`
+(source revision `4159ca2d1d35aeb98f246e11ba0a0e65ada69628`). Its 16 synthetic
+scope orders, eight retained error-control orders and four retained-dispute
+orders all passed their declared expectations. This supports proceeding to
+admission; it does not establish candidate quality or performance. Historical v5
+judgments remain unchanged. Private cases and raw model outputs stay ignored.
