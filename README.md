@@ -145,6 +145,8 @@ The `@effort` judge syntax uses the dedicated cache, an isolated home and explic
 
 Rubric v5 retains the v4 evidence separation and adds independent clause, fallback, and review-location audits. It supplies original work-session evidence and each writer's fresh command evidence separately. Capture-summary references `A.V0` and `B.V0` make recording limits citable; they cannot establish that a check passed, failed or did not run. Missing check receipts remain evidence gaps; contradictions and scope overclaims have separate findings. Evidence-dependent preferences are inconclusive, and reports show evidence coverage. Preserve historical v2/v3 results. Legacy v2 unsupported counts may include missing fresh evidence and must not be interpreted as fabrication rates. See [validation evidence and historical audits](docs/validation-evidence.md).
 
+Rubric v6 makes scope findings depend on the breadth actually asserted in context and a reachable, source-backed counterexample. It separates an omitted unchanged fallback from an incorrect universal guarantee. See [scope calibration](docs/scope-calibration.md) for the policy, fixed synthetic examples, and current calibration limits. Historical v5 results remain unchanged.
+
 To prepare existing development drafts for reassessment while preserving their originals:
 
 ```sh

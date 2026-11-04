@@ -4,6 +4,10 @@ Implementation follows the approved plan: immutable build/case inputs; stage-spe
 
 The previous complete development experiment remains `results/round2-dev-v10` and failed its quality gate. Its 30 drafts and 80 order judgments are historical evidence, not new confirmation samples. Earlier partial trials are diagnostics. Held-out sources stay sealed until development passes.
 
+The [admission follow-up](admission-issues.md) records the rubric-v6 scope policy
+and successful local reproduction of both interrupted fixture suites. Live judge
+calibration remains pending; the original screen's outcome is unchanged.
+
 ## Execution order
 
 - [x] Isolate and pin Tracetoon's Showtail build input.
