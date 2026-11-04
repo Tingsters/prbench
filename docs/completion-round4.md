@@ -103,3 +103,51 @@ scope orders, eight retained error-control orders and four retained-dispute
 orders all passed their declared expectations. This supports proceeding to
 admission; it does not establish candidate quality or performance. Historical v5
 judgments remain unchanged. Private cases and raw model outputs stay ignored.
+
+## Completed round-four verdict
+
+The fixed admission screen finished **inconclusive** (exit 3): four new candidate
+drafts, 16 accepted order judgments and two passing isolation probes. No writer
+or judge invocation was added beyond the declared screen. All four artifacts
+met the three-role/current-v2-review and completed-validation coverage checks;
+there were no workflow/evidence gaps or pending cleanup. These are admission
+checks, not confirmation performance results.
+
+Both judges flagged one candidate's absolute claim that an earlier evaluation
+had not been rerun. In one presentation order they marked it unverifiable:
+omitted executions cannot prove absence of a fresh run. In reverse order they
+read it as a historical assertion contradicted by a later recorded rerun. The
+report retains both interpretations, one separate reference-control finding
+and one separate preference flip. It does not collapse two judges' flags on the
+same claim into two independent candidate defects, rewrite a judgment or
+adjudicate the ambiguity away.
+
+The admission experiment is
+`8ec7ebd53a0845a5afe4fd18593d77fd4f87209012df2103f2aa452816a0114c`;
+its immutable judging stage is
+`92ef651f4a2a9a8d6dd1f2a3ab77d9921497b4f4c60612788295195c3ec9c00a`
+with pairs digest
+`a09742e46bee376f810cb6ee4c8d28c76353ac6b5769244a2c5d1a3bc10bdb28`.
+
+The frozen candidate was rc.24 at source `872a37d`, build
+`dbdff58866721e9b52186d9ff1637a419d1212538c018244c3b6da8477699193`.
+CI run [41772612043](https://github.com/Tingsters/tracetoon/actions/runs/41772612043)
+passed all three platform suites, reproducibility, portable ZIP checks and a
+separate rehearsal of the exact retained Windows bundle and executable.
+Artifact `13295193643` has ZIP digest
+`439935c9ad5da03d9730c9fcd44054ded7def2861e2c3b26409a724ea64cec3d`;
+the Windows executable has SHA-256
+`549e5e8dda749d54f75d6a07918fd9c7bc5a97ca4a5095b8562b396963ab104e`.
+Compilation uses Ubuntu because the pinned Bun toolchain's Windows-to-Linux
+cross-compilation failed; the Windows verification consumes the uploaded bytes
+without rebuilding them. Archive entries retain Unix executable permissions,
+and Linux/macOS CI extracts and executes the launcher.
+
+The declared stopping rule now ends this round. Development confirmation and
+held-out testing were not launched; held-out sources remain unopened. No
+adoption or performance gain is established, and nothing was merged, released
+or installed. Raw private evidence stays ignored and the candidate is retained.
+The concrete follow-up is to scope negative validation claims to the captured
+record and reconcile later historical outcomes before describing reruns. That
+requires a separately authorized candidate round, not automatic retuning or
+resampling of this one.
