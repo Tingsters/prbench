@@ -151,3 +151,14 @@ The concrete follow-up is to scope negative validation claims to the captured
 record and reconcile later historical outcomes before describing reruns. That
 requires a separately authorized candidate round, not automatic retuning or
 resampling of this one.
+
+## Subsequent delivery decision
+
+After reviewing this verdict, the user explicitly requested a new release
+through a PR to main and local installation. That request authorizes shipping
+the retained CI-tested rc.24 artifact despite the inconclusive admission; it
+does not change the evaluation result or authorize a new benchmark round.
+Tracetoon's `tracetoon.release-promotion/v2` record preserves the actual
+calibration/admission report hashes and marks both confirmation stages not run.
+The release continues to verify the original CI artifact, source build identity
+and every payload checksum. No quality-score or performance gain is established.
