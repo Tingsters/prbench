@@ -8,11 +8,13 @@ export interface AgentRunResult {
   isError: boolean;
   costUsd?: number;
   inputTokens?: number;
+  cachedInputTokens?: number;
   outputTokens?: number;
   numTurns?: number;
   durationMs: number;
   stageTimings?: Record<string, number>;
   stderr: string;
   cleanupTerminated?: boolean;
+  rawExitCode?: number;
   validation?: ValidationEvidence;
 }

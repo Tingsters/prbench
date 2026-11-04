@@ -1,11 +1,13 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import type { LoadedCase } from '../schema/case.ts';
-import { checkArtifact, type PRArtifact } from '../schema/artifact.ts';
-import type { System } from '../systems/types.ts';
-import { createSandbox } from './sandbox.ts';
-import { cleanupOwned, ownSandbox } from './cleanup.ts';
-import type { Sandbox } from './sandbox.ts';
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { LoadedCase } from "../schema/case.ts";
+import { checkArtifact, type PRArtifact } from "../schema/artifact.ts";
+import type { System } from "../systems/types.ts";
+import { createSandbox } from "./sandbox.ts";
+import { cleanupOwned, ownSandbox } from "./cleanup.ts";
+import type { Sandbox } from "./sandbox.ts";
+import { retainTraces, traceSnapshot } from "./traces.ts";
+import { atomicJson, recordEvent } from "./ledger.ts";
 
 export interface RunOptions {
   /** Write <outDir>/<case>/<system>.json. */
@@ -17,19 +19,33 @@ export interface RunOptions {
   prepare?: (sandbox: Sandbox) => void;
   /** Injectable disposal for platform fault tests; ownership is always checked first. */
   dispose?: (sandbox: Sandbox) => void;
+  ledgerRoot?: string;
 }
 
 export interface RunResult {
   artifact: PRArtifact;
   path?: string;
   sandboxRoot?: string;
-  cleanup?: 'removed' | 'kept' | 'pending';
+  cleanup?: "removed" | "kept" | "pending";
 }
 
 /** The case as systems see it: without the fact sheet, which is the judges' answer key. */
 export function withoutFacts(loaded: LoadedCase): LoadedCase {
   const { facts: _facts, ...rest } = loaded.case;
   return { dir: loaded.dir, case: rest };
+}
+/** The published reference is also an answer key; only the original-reference system may read it. */
+export function withoutAnswers(loaded: LoadedCase): LoadedCase {
+  const {
+    facts: _facts,
+    original: _original,
+    provenance: _provenance,
+    ...rest
+  } = loaded.case;
+  return {
+    dir: loaded.dir,
+    case: { ...rest, provenance: { source: "prbench.writer-input" } },
+  };
 }
 
 /** Runs one system on one case in a fresh sandbox and checks the artifact it returns. */
@@ -51,18 +67,29 @@ export async function runCase(
   const status: Record<string, any> = {
     case: loaded.case.id,
     system: system.id,
-    artifact: 'missing',
+    artifact: "missing",
     stageTimings: { setupMs },
+    cleanup: { state: "pending", owner },
   };
+  const statusFile = opts.outDir
+    ? join(opts.outDir, loaded.case.id, `${system.id}.status.json`)
+    : undefined;
   let result: RunResult | undefined;
   let primary: unknown;
+  let originalTraces = new Map<string, string>();
   try {
+    // A failed ownership write must still reach owned-sandbox cleanup.
+    if (statusFile) atomicJson(statusFile, status);
     const preparing = performance.now();
     opts.prepare?.(sandbox);
+    originalTraces = traceSnapshot(sandbox);
     status.stageTimings.preparationMs = performance.now() - preparing;
     log(`${loaded.case.id} / ${system.id}: sandbox at ${sandbox.root}`);
     const artifact = await system.run({
-      loaded: withoutFacts(loaded),
+      loaded:
+        system.id === "original"
+          ? withoutFacts(loaded)
+          : withoutAnswers(loaded),
       sandbox,
       log,
     });
@@ -73,7 +100,7 @@ export async function runCase(
     const problems = checkArtifact(artifact);
     if (problems.length)
       throw new Error(
-        `${system.id} returned an invalid artifact:\n  ${problems.join('\n  ')}`,
+        `${system.id} returned an invalid artifact:\n  ${problems.join("\n  ")}`,
       );
     if (artifact.case !== loaded.case.id || artifact.system !== system.id) {
       throw new Error(
@@ -85,10 +112,10 @@ export async function runCase(
       const dir = join(opts.outDir, loaded.case.id);
       mkdirSync(dir, { recursive: true });
       path = join(dir, `${system.id}.json`);
-      writeFileSync(path, JSON.stringify(artifact, null, 2) + '\n');
+      writeFileSync(path, JSON.stringify(artifact, null, 2) + "\n");
     }
-    status.artifact = 'saved';
-    status.writer = artifact.meta.writerOutcome ?? 'not-reported';
+    status.artifact = "saved";
+    status.writer = artifact.meta.writerOutcome ?? "not-reported";
     result = {
       artifact,
       path,
@@ -98,35 +125,57 @@ export async function runCase(
     primary = error;
     status.error = error instanceof Error ? error.message : String(error);
   } finally {
+    if (opts.outDir) {
+      try {
+        status.traces = retainTraces(
+          sandbox,
+          originalTraces,
+          join(opts.outDir, loaded.case.id, `${system.id}.traces`),
+        );
+      } catch (error) {
+        status.traceGap = String(error);
+      }
+    }
     const cleanupStart = performance.now();
-    status.cleanup = { state: 'kept', owner };
+    status.cleanup = { state: "kept", owner };
     if (!opts.keepSandbox) {
       try {
         cleanupOwned(
           owner,
           opts.dispose ? () => opts.dispose!(sandbox) : undefined,
         );
-        status.cleanup.state = 'removed';
+        status.cleanup.state = "removed";
       } catch (error) {
         status.cleanup = {
-          state: 'pending',
+          state: "pending",
           owner,
           error: error instanceof Error ? error.message : String(error),
         };
         log(
           `Cleanup pending for this invocation; saved artifacts are retained.`,
         );
+        if (opts.ledgerRoot)
+          recordEvent(opts.ledgerRoot, {
+            stage: "cleanup",
+            key: owner.token,
+            kind: "failed",
+            failureKind: "cleanup",
+            detail: "Owned sandbox cleanup remains pending.",
+          });
       }
     }
     status.stageTimings.cleanupMs = performance.now() - cleanupStart;
     status.stageTimings.totalMs = performance.now() - began;
-    if (opts.outDir) {
-      const dir = join(opts.outDir, loaded.case.id);
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(
-        join(dir, `${system.id}.status.json`),
-        JSON.stringify(status, null, 2) + '\n',
-      );
+    if (statusFile) {
+      try {
+        atomicJson(statusFile, status);
+      } catch (error) {
+        if (primary === undefined) primary = error;
+        else
+          log(
+            "Status persistence also failed; the original failure is preserved.",
+          );
+      }
     }
   }
   if (primary) throw primary;

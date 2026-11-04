@@ -238,7 +238,7 @@ describe('evidence-aware judging', () => {
     expect(normalizeBody('Validation: full suite failed; focused checks passed.')).toBe('Validation: full suite failed; focused checks passed.');
   });
 
-  test('judge transport failures retry within the same bounded schema-validation budget', async () => {
+  test('missing structured output uses the single persisted format-repair budget', async () => {
     let calls = 0;
     const args = { loaded: loadCase(EXAMPLE), facts, x: artifact('x'), y: artifact('y'), outDir: tempDir() };
     const result = await judgePair({ ...args, judge: { id: 'flaky', family: 'test', ask: async () => {

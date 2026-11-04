@@ -1,3 +1,5 @@
+Rubric v5 preserves the v4 evidence meanings documented below. It adds independent checks of clauses, fallback qualifications, and the ownership of named review locations. Comparison-v2 retains raw order judgments and separate source-backed adjudications; unknown capture remains unknown. Runtime counters and declared workflow roles are diagnostic metadata, not validation outcomes.
+
 # Validation evidence and rubric v4
 
 A writer can run checks while preparing a PR, after the original work sessions ended. Rubric v2 supplied judges only the original sessions and required those sessions to establish claimed passes. Consequently, some historical `unsupportedClaims` describe a judge evidence gap. Those counts must not be described as fabrication rates, or used to conclude that writers should omit accurate fresh results.
@@ -24,12 +26,12 @@ The packet distinguishes shared original work-session evidence from description 
 
 Judges assess every validation claim and disputed claim using four statuses:
 
-| Status | Meaning | Aggregate treatment |
-|---|---|---|
-| `supported` | Positive evidence establishes the claim at its stated scope | Verified claim assessment |
-| `contradicted` | Specific evidence conflicts at the relevant time, content and environment | `factualErrors` |
-| `unsupported` | A scope overclaim, such as a universal guarantee from a narrow check | `unsupportedClaims` |
-| `unverifiable` | Missing, partial or truncated evidence prevents assessment | Separate evidence-gap count |
+| Status         | Meaning                                                                   | Aggregate treatment         |
+| -------------- | ------------------------------------------------------------------------- | --------------------------- |
+| `supported`    | Positive evidence establishes the claim at its stated scope               | Verified claim assessment   |
+| `contradicted` | Specific evidence conflicts at the relevant time, content and environment | `factualErrors`             |
+| `unsupported`  | A scope overclaim, such as a universal guarantee from a narrow check      | `unsupportedClaims`         |
+| `unverifiable` | Missing, partial or truncated evidence prevents assessment                | Separate evidence-gap count |
 
 Each assessment records the exact claim, reason and evidence references. Supported, contradicted and unsupported assessments require references. The validator rejects nonexistent, omitted and opposite-side fresh references, error lists that do not match assessments, and inconsistent abstentions. Reference allow-lists come from structured evidence, never from headings a writer could insert into PR text or command output. A contradiction establishes an error, not intent; no fabrication rate is inferred.
 
@@ -54,13 +56,17 @@ If authentic logs survived, supply `--recovery-manifest manifest.local.json` wit
 ```json
 {
   "schema": "prbench.recovery/v1",
-  "entries": [{
-    "case": "case-id",
-    "system": "system-id",
-    "artifactSha256": "sha256-of-original-artifact-file",
-    "repoPath": "/original/writer/sandbox/work/repo",
-    "sessions": [{"file": "writer-session.jsonl", "sha256": "sha256-of-session-file"}]
-  }]
+  "entries": [
+    {
+      "case": "case-id",
+      "system": "system-id",
+      "artifactSha256": "sha256-of-original-artifact-file",
+      "repoPath": "/original/writer/sandbox/work/repo",
+      "sessions": [
+        { "file": "writer-session.jsonl", "sha256": "sha256-of-session-file" }
+      ]
+    }
+  ]
 }
 ```
 
@@ -69,5 +75,13 @@ Session paths are relative to the manifest or absolute. Recovery verifies source
 Where recovered evidence supports reassessment, rejudge the same copied drafts with the normal `judge` command, pointing `--artifacts` to the audit's `artifacts/` and `--out` to a separate v3 results directory. That command calls configured model judges. Keep old and new reports separate and review changed findings, remaining gaps and position flips. Without recovered logs, an audit cannot resolve historical fresh-check claims or produce corrected fabrication/error rates. A new writer benchmark would be a separate cohort, not a reconstruction of the old executions.
 
 ## Verification and remaining calibration
+
+Comparison-v2 adjudication can cite an immutable code/session/commit source or a
+captured fresh command. A fresh-command proof uses `kind: "validation"`, the
+flagged candidate's `artifactDigest`, an actual `commandId` such as `V1`, and the
+SHA-256 and line range of `JSON.stringify(command, null, 2)`. Cross-artifact proofs,
+changed bytes, invalid ranges and `V0` recording summaries are rejected. A matching
+source establishes integrity; the recorded reviewer and rationale determine the
+semantic conclusion. Adjudication never overwrites the raw judge response.
 
 Synthetic tests cover true fresh passes absent from original sessions, fresh failures, changed/unknown content, missing receipts, incomplete and canceled commands, output truncation, polling, copied-log exclusion, redaction, reference spoofing, both A/B orders, cache invalidation, report abstention/coverage, and recovery provenance. Provider fixtures execute actual case tests through both native and tool flows and verify evidence survives into artifacts. These verify the evaluator's plumbing and constraints; they do not establish a real judge's semantic reliability. Human and cross-family calibration remain necessary under the methodology's development/held-out protocol.

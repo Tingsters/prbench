@@ -1,3 +1,5 @@
+Current comparisons use rubric v5 and comparison manifest v2. Rubric v5 retains v4's neutral evidence contract and adds clause-level fallback and ownership-pointer audits. Historical versions below remain historical; do not pool them with v5. Confirmation predeclares three writer replicates and clusters uncertainty by case. See [evaluation reliability](evaluation-round3.md) and the README's comparison-v2 commands.
+
 # Methodology
 
 prbench answers one question: **does a given PR-writing tool produce better pull requests than the agent would have produced without it?** "Better" means better for the person reviewing the PR. The design follows from the research in [related-work.md](related-work.md).
@@ -18,13 +20,13 @@ Status: milestone 1. Cases, artifacts, the sandbox, five systems (`original`, `c
 
 ## Systems
 
-| System | What runs | Where the PR text comes from |
-|---|---|---|
-| `original` | Nothing | The PR that was published for the case. For Tracetoon's eval cases this is the description the agent wrote at the end of its own working session, before Tracetoon existed: the **in-session AI baseline**. |
-| `claude-native` | `claude -p` in a **fresh session**, no PR tool installed | The PR it opens through `gh` (captured by the fake). |
-| `tracetoon` | The same `claude -p`, with Tracetoon's skill and hooks installed in the sandbox's home and comics off | Tracetoon's run folder (`title.txt`, `final-body.md`). Its flow ends at a preview awaiting approval, which never comes. |
-| `codex-native` | `codex exec` in a fresh session with a clean home | PR captured through fake `gh`. |
-| `codex-tracetoon` | The same Codex request, with Tracetoon's Codex skill and hooks installed, comics off | Captured PR or Tracetoon's latest draft. |
+| System            | What runs                                                                                             | Where the PR text comes from                                                                                                                                                                                |
+| ----------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `original`        | Nothing                                                                                               | The PR that was published for the case. For Tracetoon's eval cases this is the description the agent wrote at the end of its own working session, before Tracetoon existed: the **in-session AI baseline**. |
+| `claude-native`   | `claude -p` in a **fresh session**, no PR tool installed                                              | The PR it opens through `gh` (captured by the fake).                                                                                                                                                        |
+| `tracetoon`       | The same `claude -p`, with Tracetoon's skill and hooks installed in the sandbox's home and comics off | Tracetoon's run folder (`title.txt`, `final-body.md`). Its flow ends at a preview awaiting approval, which never comes.                                                                                     |
+| `codex-native`    | `codex exec` in a fresh session with a clean home                                                     | PR captured through fake `gh`.                                                                                                                                                                              |
+| `codex-tracetoon` | The same Codex request, with Tracetoon's Codex skill and hooks installed, comics off                  | Captured PR or Tracetoon's latest draft.                                                                                                                                                                    |
 
 Within each provider's pair, both systems get the same request word for word (`PR_PROMPT` in `src/systems/agentShared.ts`), the same model, permissions and timeout. Claude pairs share a USD cap. Codex pairs share explicit reasoning effort and no USD cap: its CLI cannot enforce dollar limits. Neither pair changes the request to favor a tool.
 
@@ -76,7 +78,7 @@ including user input; a case with leaked answer text fails import.
 `prbench judge` compares every pair of systems on every case with artifacts and a fact sheet (`src/judge/`).
 
 - **Blind and normalized.** Tool markers, HTML comments, comics, comic transcripts and attribution footers ("Assisted-by", "Generated with Claude Code", "Co-Authored-By") are stripped before judging, so judges compare descriptions, not branding. Judges never see a tool's own self-review.
-- **Both orders.** Each pair is judged with each system in position A once. A win needs both orders to agree. If either order's preference depends on unavailable evidence, the pair is inconclusive; other disagreements are ties, and a *flip* when the orders picked opposite systems.
+- **Both orders.** Each pair is judged with each system in position A once. A win needs both orders to agree. If either order's preference depends on unavailable evidence, the pair is inconclusive; other disagreements are ties, and a _flip_ when the orders picked opposite systems.
 - **Judge selection.** The default uses two model families: `claude -p` (tools off, hooks off, no saved session) and `codex exec` (ephemeral, read-only), both from an empty temp directory with structured output. Explicit `codex:model@effort` judges use the dedicated OAuth cache and clean home, with hooks, memories and delegation disabled. Sol and Terra are same-family judges; their agreement is not independent cross-family validation. A pair's result is reported per judge and as "all judges agree". That combined result includes only pairs completed by every configured judge. Missing judgments are listed separately, never counted as ties or agreement. Reports show completed versus expected case/pair/judge results, including cases where every judge failed.
 - **What a judge sees.** The fact sheet, commits and diff, plus a neutral excerpt of original work sessions (`src/judge/evidence.ts`). Rubric v4 supplies each writer's fresh command evidence from its artifact, separately labeled and swapped with the corresponding description. `A.V0` and `B.V0` cite capture scope and recording limits, never a test outcome. Historical validation uncertainties are time-scoped; a fresh check can establish a later result. Missing or truncated evidence is explicit. Writers never see fact sheets, and metrics never read tool-specific files. See [validation evidence](validation-evidence.md) for capture, content observations and recovery limits.
 - **What a judge returns** (`src/judge/rubric.ts`, rubric v4): cited claim assessments (supported, contradicted, unsupported scope overclaim, or unverifiable due to an evidence gap); separate factual-error and overclaim lists; fact-sheet coverage; uncertainties respected; traps hit; and 0–2 scores on ten reviewer-usefulness items. Missing evidence neither proves fabrication nor verifies a claim. Accurate validation results must be preserved. Preferences include an explicit evidence-dependent abstention. Accuracy comes first, then usefulness, then the reader's effort; length is not a virtue.
@@ -102,7 +104,7 @@ and compaction recaps are not labeled as user requests.
 
 ## Metrics still to build
 
-1. **Accuracy checker.** Independently validate extracted claims against code and execution evidence, classify mismatches with Gong et al.'s taxonomy, and validate against their labelled PRs. Until then, accuracy comes from model judgments under the v4 evidence contract; synthetic regression tests do not establish semantic judge reliability.
+1. **Accuracy checker.** Independently validate extracted claims against code and execution evidence, classify mismatches with Gong et al.'s taxonomy, and validate against their labelled PRs. Until then, accuracy comes from model judgments under the v5 evidence contract, with separate source adjudication of flags; synthetic regression tests do not establish semantic judge reliability.
 2. **Cold-read comprehension.** A reader model sees only the title and body and answers questions generated from the fact sheet.
 3. **Deterministic signals.** Title rules, template compliance, coverage of behaviour-changing files, commit hygiene. (Length and cost are already in the report.)
 4. **Real-world signals.** Edit distance before posting, merged as-is vs. after revision, time to first review.
@@ -119,11 +121,11 @@ Tools under test may have been tuned on some cases (Tracetoon was tuned on its o
 
 ## Roadmap
 
-| Milestone | Scope |
-|---|---|
-| **M0 scaffold** (done) | Case and artifact schemas, sandbox, fake `gh`, `original` system, CLI (`validate`, `systems`, `run`, `check-artifact`), synthetic example case, these docs. |
+| Milestone                                | Scope                                                                                                                                                                                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **M0 scaffold** (done)                   | Case and artifact schemas, sandbox, fake `gh`, `original` system, CLI (`validate`, `systems`, `run`, `check-artifact`), synthetic example case, these docs.                                                                                              |
 | **M1 first comparison** (this milestone) | Tracetoon's eval cases imported locally with session slices. `claude-native` and `tracetoon` systems. Blind pairwise judging in both orders by two model families, statistics and report. Sandbox fetch blocked and fact-sheet path hidden from systems. |
-| **M2 accuracy checker** | Claim extraction and checking; validate against Gong et al.'s labelled PRs. Resumed-session baseline for short sessions. |
-| **M3 calibration** | Human labeling round, agreement statistics, mutation tests; freeze judge prompt v1. |
-| **M4 scale** | 50+ held-out replay cases across repositories and agents; end-to-end pilot on about 30 SWE-bench Verified tasks. |
-| **M5 operate** | Regression gate for PR tools' release candidates, published reports, real-world signals. |
+| **M2 accuracy checker**                  | Claim extraction and checking; validate against Gong et al.'s labelled PRs. Resumed-session baseline for short sessions.                                                                                                                                 |
+| **M3 calibration**                       | Human labeling round, agreement statistics, mutation tests; freeze judge prompt v1.                                                                                                                                                                      |
+| **M4 scale**                             | 50+ held-out replay cases across repositories and agents; end-to-end pilot on about 30 SWE-bench Verified tasks.                                                                                                                                         |
+| **M5 operate**                           | Regression gate for PR tools' release candidates, published reports, real-world signals.                                                                                                                                                                 |

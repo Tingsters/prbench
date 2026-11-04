@@ -1,18 +1,18 @@
 // Inspect static orchestration arguments. Never execute transcript code.
-import ts from 'typescript';
-import { isAbsolute } from 'node:path';
+import ts from "typescript";
+import { isAbsolute } from "node:path";
 
 export interface ExecutionContext {
   command: string;
   cwd: string;
-  cwdSource?: 'recorded-turn-context';
+  cwdSource?: "recorded-turn-context";
 }
 export function staticExecutionContexts(
   code: string,
   defaultCwd?: string,
 ): ExecutionContext[] {
   const file = ts.createSourceFile(
-    'call.js',
+    "call.js",
     code,
     ts.ScriptTarget.Latest,
     true,
@@ -53,7 +53,7 @@ export function staticExecutionContexts(
   const execute = (node: ts.Expression): boolean => {
     if (ts.isAwaitExpression(node)) return execute(node.expression);
     if (!ts.isCallExpression(node)) return false;
-    if (['Promise.all', 'Promise.allSettled'].includes(name(node.expression))) {
+    if (["Promise.all", "Promise.allSettled"].includes(name(node.expression))) {
       const array = node.arguments[0];
       return (
         node.arguments.length === 1 &&
@@ -63,7 +63,7 @@ export function staticExecutionContexts(
       );
     }
     if (
-      name(node.expression) !== 'tools.exec_command' ||
+      name(node.expression) !== "tools.exec_command" ||
       node.arguments.length !== 1
     )
       return false;
@@ -80,27 +80,27 @@ export function staticExecutionContexts(
       properties.set(
         ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)
           ? p.name.text
-          : '',
+          : "",
         p.initializer,
       );
     }
-    const command = value(properties.get('cmd')),
-      cwd = properties.has('workdir')
-        ? value(properties.get('workdir'))
+    const command = value(properties.get("cmd")),
+      cwd = properties.has("workdir")
+        ? value(properties.get("workdir"))
         : defaultCwd;
     if (!command || !cwd || !isAbsolute(cwd)) return false;
     contexts.push({
       command,
       cwd,
-      ...(properties.has('workdir')
+      ...(properties.has("workdir")
         ? {}
-        : { cwdSource: 'recorded-turn-context' as const }),
+        : { cwdSource: "recorded-turn-context" as const }),
     });
     return true;
   };
   const print = (node: ts.Expression): boolean => {
     if (!ts.isCallExpression(node)) return false;
-    if (['text', 'notify'].includes(name(node.expression))) {
+    if (["text", "notify"].includes(name(node.expression))) {
       if (
         node.arguments.length === 1 &&
         ts.isAwaitExpression(node.arguments[0]!) &&
@@ -109,7 +109,11 @@ export function staticExecutionContexts(
         return true;
       let safe = true;
       const inspect = (n: ts.Node) => {
-        if (ts.isCallExpression(n) || ts.isFunctionLike(n)) safe = false;
+        if (
+          (ts.isCallExpression(n) && name(n.expression) !== "JSON.stringify") ||
+          ts.isFunctionLike(n)
+        )
+          safe = false;
         ts.forEachChild(n, inspect);
       };
       node.arguments.forEach((a) => inspect(a));
@@ -117,13 +121,13 @@ export function staticExecutionContexts(
     }
     if (
       !ts.isPropertyAccessExpression(node.expression) ||
-      node.expression.name.text !== 'forEach' ||
+      node.expression.name.text !== "forEach" ||
       node.arguments.length !== 1
     )
       return false;
     const callback = node.arguments[0]!;
     if (ts.isIdentifier(callback))
-      return ['text', 'notify'].includes(callback.text);
+      return ["text", "notify"].includes(callback.text);
     if (
       !ts.isArrowFunction(callback) ||
       callback.parameters.some(
@@ -146,7 +150,7 @@ export function staticExecutionContexts(
         if (
           !ts.isIdentifier(declaration.name) ||
           bindings.has(declaration.name.text) ||
-          ['tools', 'Promise', 'text', 'notify'].includes(
+          ["tools", "Promise", "text", "notify", "JSON"].includes(
             declaration.name.text,
           ) ||
           !declaration.initializer

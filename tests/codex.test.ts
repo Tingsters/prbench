@@ -116,6 +116,9 @@ describe('Codex systems', () => {
 });
 
 test('Codex usage does not double-count cached input, and failed turns remain errors', () => {
+  expect(parseCodexResult('{"type":"turn.completed"}').inputTokens).toBeUndefined();
+  expect(parseCodexResult('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}\n{"type":"turn.completed"}').inputTokens).toBeUndefined();
+  expect(parseCodexResult('{"type":"turn.completed","usage":{"input_tokens":0,"output_tokens":0}}')).toMatchObject({inputTokens:0,outputTokens:0});
   expect(parseCodexResult('{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":60,"output_tokens":5}}')).toMatchObject({ inputTokens: 100, outputTokens: 5 });
   expect(parseCodexResult('{"type":"turn.failed","error":{"message":"unavailable"}}')).toMatchObject({ isError: true, result: 'unavailable' });
 });

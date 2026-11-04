@@ -1,16 +1,25 @@
-import type { Sandbox } from '../run/sandbox.ts';
-import type { AgentRunResult } from './types.ts';
-import { codexCommand, codexRunEnv, withCodexAuth } from './codexAuth.ts';
-import { runAgentProcess } from './process.ts';
-import { startValidationCapture } from './validation.ts';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import type { Sandbox } from "../run/sandbox.ts";
+import type { AgentRunResult } from "./types.ts";
+import { codexCommand, codexRunEnv, withCodexAuth } from "./codexAuth.ts";
+import { runAgentProcess } from "./process.ts";
+import { startValidationCapture } from "./validation.ts";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
-export type ReasoningEffort = typeof REASONING_EFFORTS[number];
+export const REASONING_EFFORTS = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export function reasoningEffort(value: string): ReasoningEffort {
-  if (!(REASONING_EFFORTS as readonly string[]).includes(value)) throw new Error(`Unknown reasoning effort "${value}".`);
+  if (!(REASONING_EFFORTS as readonly string[]).includes(value))
+    throw new Error(`Unknown reasoning effort "${value}".`);
   return value as ReasoningEffort;
 }
 
@@ -25,68 +34,174 @@ export interface CodexRunOptions {
   skillPath?: string;
 }
 
-export function codexSkillConfiguration(repo: string, skillPath?: string): string {
-  const dirs = [join(homedir(), '.agents/skills/tracetoon'), join(homedir(), '.codex/skills/tracetoon')];
-  if (!skillPath) dirs.push(join(repo, '.agents/skills/tracetoon'));
-  const entries = dirs.flatMap(dir => [join(dir, 'SKILL.md'), dir]).map(path => ({ path, enabled: false }));
-  if (skillPath) entries.push({ path: join(skillPath, 'SKILL.md'), enabled: true });
-  return `skills.config=[${entries.map(e => `{path=${JSON.stringify(e.path.replaceAll('\\', '/'))},enabled=${e.enabled}}`).join(',')}]`;
+export function codexSkillConfiguration(
+  repo: string,
+  skillPath?: string,
+): string {
+  const dirs = [
+    join(homedir(), ".agents/skills/tracetoon"),
+    join(homedir(), ".codex/skills/tracetoon"),
+  ];
+  if (!skillPath) dirs.push(join(repo, ".agents/skills/tracetoon"));
+  const entries = dirs
+    .flatMap((dir) => [join(dir, "SKILL.md"), dir])
+    .map((path) => ({ path, enabled: false }));
+  if (skillPath)
+    entries.push({ path: join(skillPath, "SKILL.md"), enabled: true });
+  return `skills.config=[${entries.map((e) => `{path=${JSON.stringify(e.path.replaceAll("\\", "/"))},enabled=${e.enabled}}`).join(",")}]`;
 }
 
-export function codexTerminalEvent(line: string): 'success' | 'failure' | undefined {
+export function codexTerminalEvent(
+  line: string,
+): "success" | "failure" | undefined {
   try {
     const event = JSON.parse(line);
-    if (event.type === 'turn.completed') return 'success';
-    if (event.type === 'turn.failed') return 'failure';
-  } catch { /* Diagnostics are not terminal events. */ }
+    if (event.type === "turn.completed") return "success";
+    if (event.type === "turn.failed") return "failure";
+  } catch {
+    /* Diagnostics are not terminal events. */
+  }
 }
 
 /** Consume terminal JSONL events, without retaining tool output or credentials. */
 export function parseCodexResult(stdout: string): Partial<AgentRunResult> {
-  let inputTokens = 0, outputTokens = 0, numTurns = 0;
+  let inputTokens = 0,
+    outputTokens = 0,
+    numTurns = 0;
+  let cachedInputTokens = 0,
+    cacheKnown = true,
+    inputKnown = true,
+    outputKnown = true;
+  const known = (n: unknown): n is number =>
+    typeof n === "number" && Number.isFinite(n) && n >= 0;
   let result: string | undefined;
   let isError = false;
-  for (const line of stdout.split('\n')) {
+  for (const line of stdout.split("\n")) {
     try {
       const e = JSON.parse(line);
-      if (e.type === 'item.completed' && e.item?.type === 'agent_message') result = e.item.text;
-      if (e.type === 'turn.completed') {
-        inputTokens += e.usage?.input_tokens ?? 0;
-        outputTokens += e.usage?.output_tokens ?? 0;
+      if (e.type === "item.completed" && e.item?.type === "agent_message")
+        result = e.item.text;
+      if (e.type === "turn.completed") {
+        if (known(e.usage?.input_tokens)) inputTokens += e.usage.input_tokens;
+        else inputKnown = false;
+        if (known(e.usage?.cached_input_tokens))
+          cachedInputTokens += e.usage.cached_input_tokens;
+        else cacheKnown = false;
+        if (known(e.usage?.output_tokens))
+          outputTokens += e.usage.output_tokens;
+        else outputKnown = false;
         numTurns++;
       }
-      if (e.type === 'turn.failed') { isError = true; result = e.error?.message ?? result; }
-    } catch { /* Non-JSON diagnostics are not results. */ }
+      if (e.type === "turn.failed") {
+        isError = true;
+        result = e.error?.message ?? result;
+      }
+    } catch {
+      /* Non-JSON diagnostics are not results. */
+    }
   }
-  return { result, isError, ...(numTurns ? { inputTokens, outputTokens, numTurns } : {}) };
+  return {
+    result,
+    isError,
+    ...(numTurns
+      ? {
+          ...(inputKnown ? { inputTokens } : {}),
+          ...(outputKnown ? { outputTokens } : {}),
+          numTurns,
+          ...(cacheKnown ? { cachedInputTokens } : {}),
+        }
+      : {}),
+  };
 }
 
-export async function runCodex(sandbox: Sandbox, opts: CodexRunOptions): Promise<AgentRunResult> {
+export async function runCodex(
+  sandbox: Sandbox,
+  opts: CodexRunOptions,
+): Promise<AgentRunResult> {
   let authWaitMs = 0;
-  return withCodexAuth(sandbox.codexHome, async () => {
-    const started = Date.now();
-    const cmd = [
-      ...codexCommand(), 'exec', '--ignore-user-config', '--json', '--color', 'never',
-      '--model', opts.model, '-c', `model_reasoning_effort="${opts.reasoningEffort}"`,
-      '-c', 'cli_auth_credentials_store="file"', '-c', 'approval_policy="never"',
-      '-c', 'web_search="disabled"', '--sandbox', 'danger-full-access',
-      '--disable', 'apps', '-c', 'apps._default.enabled=false',
-      '--disable', 'browser_use', '--disable', 'computer_use',
-      '--enable', 'skip_host_skill_discovery', '--disable', 'remote_plugin',
-      '-c', codexSkillConfiguration(sandbox.repo, opts.skillPath),
-      '--enable', 'hooks', '--dangerously-bypass-hook-trust',
-      '--add-dir', sandbox.gitDir, '-',
-    ];
-    opts.log?.(`codex exec --model ${opts.model} --reasoning-effort ${opts.reasoningEffort}`);
-    const env = codexRunEnv({ ...sandbox.env, ...opts.env });
-    const capture = startValidationCapture(sandbox, env);
-    const executionStarted = performance.now();
-    const result = await runAgentProcess(cmd, {
-      cwd: sandbox.repo,
-      env, prompt: opts.prompt, timeoutMs: opts.timeoutMs, terminalEvent: codexTerminalEvent, onLine: capture.line,
-    });
-    const writerMs = performance.now() - executionStarted, captureStarted = performance.now();
-    const parsed = parseCodexResult(result.stdout), validation = capture.finish(result);
-    return { ...parsed, validation, exitCode: result.exitCode, timedOut: result.timedOut, cleanupTerminated: result.cleanupTerminated, isError: Boolean(parsed.isError || result.exitCode !== 0), durationMs: Date.now() - started, stageTimings: { authWaitMs, writerMs, collectionEvidenceMs: performance.now() - captureStarted }, stderr: result.stderr.slice(-4000) };
-  }, { onAcquired: (ms) => { authWaitMs = ms; } });
+  return withCodexAuth(
+    sandbox.codexHome,
+    async () => {
+      const started = Date.now();
+      const cmd = [
+        ...codexCommand(),
+        "exec",
+        "--ignore-user-config",
+        "--json",
+        "--color",
+        "never",
+        "--model",
+        opts.model,
+        "-c",
+        `model_reasoning_effort="${opts.reasoningEffort}"`,
+        "-c",
+        'cli_auth_credentials_store="file"',
+        "-c",
+        'approval_policy="never"',
+        "-c",
+        'web_search="disabled"',
+        "--sandbox",
+        "danger-full-access",
+        "--disable",
+        "apps",
+        "-c",
+        "apps._default.enabled=false",
+        "--disable",
+        "browser_use",
+        "--disable",
+        "computer_use",
+        "--enable",
+        "skip_host_skill_discovery",
+        "--disable",
+        "remote_plugin",
+        "-c",
+        codexSkillConfiguration(sandbox.repo, opts.skillPath),
+        "--enable",
+        "hooks",
+        "--dangerously-bypass-hook-trust",
+        "--add-dir",
+        sandbox.gitDir,
+        "-",
+      ];
+      opts.log?.(
+        `codex exec --model ${opts.model} --reasoning-effort ${opts.reasoningEffort}`,
+      );
+      const env = codexRunEnv({ ...sandbox.env, ...opts.env });
+      const capture = startValidationCapture(sandbox, env);
+      const executionStarted = performance.now();
+      const result = await runAgentProcess(cmd, {
+        cwd: sandbox.repo,
+        env,
+        prompt: opts.prompt,
+        timeoutMs: opts.timeoutMs,
+        terminalEvent: codexTerminalEvent,
+        onLine: capture.line,
+      });
+      const writerMs = performance.now() - executionStarted,
+        captureStarted = performance.now();
+      const parsed = parseCodexResult(result.stdout),
+        validation = capture.finish(result);
+      return {
+        ...parsed,
+        validation,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        cleanupTerminated: result.cleanupTerminated,
+        rawExitCode: result.rawExitCode,
+        isError: Boolean(parsed.isError || result.exitCode !== 0),
+        durationMs: Date.now() - started,
+        stageTimings: {
+          authWaitMs,
+          writerMs,
+          collectionEvidenceMs: performance.now() - captureStarted,
+        },
+        stderr: result.stderr.slice(-4000),
+      };
+    },
+    {
+      onAcquired: (ms) => {
+        authWaitMs = ms;
+      },
+    },
+  );
 }
