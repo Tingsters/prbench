@@ -1,5 +1,75 @@
 # prbench
 
+### Frozen comparisons
+
+`bun run prbench compare --baseline-skill <dir> --candidate-skill <dir> --cases <dir> --split dev --out results/<experiment>`
+compares native Codex, baseline Tracetoon and candidate Tracetoon using Sol and
+Terra at medium, the same two judges in both presentation orders, and a 30-minute
+writer timeout. Each skill must include its matching platform binary in `bin/`.
+Comics and connected apps are disabled. Existing single-system commands remain available.
+
+The command freezes skill/runtime bytes and case inputs, records harness and CLI
+identity, rotates system execution order, and serializes credential use. It
+compares candidate against baseline and native separately. `--prepare-only`
+freezes without calling a model; `--resume` accepts only matching inputs and
+hash-verified saved artifacts. Changed inputs require a new output directory.
+Reports and private execution status stay in the ignored experiment directory.
+
+Before scoring, six short unscored probes (each model and system) verify the
+actual startup skill catalogue and require zero tool calls. Native must see no
+Tracetoon skill; each tool arm must see exactly its repository-local frozen copy.
+The probes use the synthetic example, never held-out content. `--verify-only`
+stops after this check. Hash-verified isolation receipts are reused on resume.
+Codex runs suppress host skill discovery and remote plugins and explicitly
+disable global Tracetoon entries. These CLI feature flags are version-specific;
+an unavailable flag or an unrecognized catalogue fails before draft collection.
+Every writer receives the same workspace-scope instructions. After collection,
+the comparison audits its neutral command records for observable host agent
+configuration/skill reads, host ancestor instructions and outside case inputs.
+A violation retains the artifact for diagnosis and rejects the comparison before
+judging or issuing its reuse receipt. This complements catalogue probes; neither
+the prompt nor the audit turns the workspace into a filesystem security boundary.
+
+`--preparation <file>` accepts an explicit JSON profile with a `cases` object.
+Each case may have `commands` (nonempty argv arrays, run in the checkout) and
+`fixtures` (`name`, local Git `bundle`, full `revision`), materialized as siblings.
+Bundle paths are relative to the profile. Preparation is identical across systems,
+must leave tracked content unchanged, and is recorded separately from writer checks.
+
+For held-out cases use `--split test --development <passing-dev-experiment>`.
+The baseline, candidate and harness must match the completed development run.
+The quality gate compares factual errors, unsupported claims and claim/context
+coverage against baseline; development pr8 must have no unsupported candidate claims.
+Do not tune on held-out findings and then present another run as untouched validation.
+
+Timing metadata distinguishes installation, authentication waiting, writer
+execution, collection and setup; status files separately record cleanup and total
+time. Legacy `durationMs` retains its existing meaning. Token counts are CLI
+usage, not dollar estimates. The adapter retains invocation-owned internal
+Tracetoon stage timers before cleanup and reports their counts, totals and
+medians alongside the neutral pipeline timings. Invalid or unavailable logs
+remain explicit gaps. Runtime timers are diagnostics, not validation evidence.
+Records may overlap and are not invocation counts; nested stages must not be
+added into a pipeline total. Use the neutral writer clock for elapsed execution.
+When Codex omits an execution directory, the collector can correlate an exact
+command and time window with explicit, statically resolved tool arguments in
+that writer's own rollout. An omitted `workdir` uses only the recorded turn
+context's default directory. It records this as `cwdSource`; ambiguous matches,
+dynamic code and other sessions remain unknown. Transcript code is never executed.
+This does not strengthen boundary fingerprints into atomic test attestations.
+
+Judges can retain a completed JSON stream reply when the CLI omits its output
+file. The same schema and evidence-reference checks still apply. Transport and
+format failures share a bounded three-attempt budget, including at most one
+format-correction request; saved judgments remain
+available for an exact-input resume after an unrecoverable failure.
+Execution content observations remain partial when
+the tool stream does not establish them; preparation never proves writer validation.
+
+A saved draft survives cleanup failure. Retry only owned pending sandboxes with
+`bun run prbench cleanup --experiment <dir>`. Ownership tokens, roots and parents
+are checked before deletion; symlinks and unrelated processes are not followed.
+
 An evaluation harness for tools that write or change the pull requests produced by AI coding agents.
 
 It answers: **does this PR tool produce better pull requests than the agent would have without it?** It runs each system on the same fixed cases, collects the PR each one would have opened, and scores those PRs for accuracy and usefulness to a reviewer.
@@ -74,7 +144,9 @@ The `@effort` judge syntax uses the dedicated cache, an isolated home and explic
 
 ## How it fits together
 
-Rubric v3 supplies original work-session evidence and each writer's fresh command evidence separately. Missing check receipts are reported as evidence gaps; contradictions and scope overclaims have separate findings. Evidence-dependent preferences are inconclusive, and reports show evidence coverage. Legacy v2 unsupported counts may include missing fresh evidence and must not be interpreted as fabrication rates. See [validation evidence and historical audits](docs/validation-evidence.md).
+Rubric v5 retains the v4 evidence separation and adds independent clause, fallback, and review-location audits. It supplies original work-session evidence and each writer's fresh command evidence separately. Capture-summary references `A.V0` and `B.V0` make recording limits citable; they cannot establish that a check passed, failed or did not run. Missing check receipts remain evidence gaps; contradictions and scope overclaims have separate findings. Evidence-dependent preferences are inconclusive, and reports show evidence coverage. Preserve historical v2/v3 results. Legacy v2 unsupported counts may include missing fresh evidence and must not be interpreted as fabrication rates. See [validation evidence and historical audits](docs/validation-evidence.md).
+
+Rubric v6 makes scope findings depend on the breadth actually asserted in context and a reachable, source-backed counterexample. It separates an omitted unchanged fallback from an incorrect universal guarantee. See [scope calibration](docs/scope-calibration.md) for the policy, fixed synthetic examples, and current calibration limits. Historical v5 results remain unchanged.
 
 To prepare existing development drafts for reassessment while preserving their originals:
 
@@ -82,7 +154,7 @@ To prepare existing development drafts for reassessment while preserving their o
 bun run prbench audit-evidence --cases cases-local --split dev --artifacts results-old/artifacts --judgments results-old/judgments --out results-evidence-audit
 ```
 
-This local audit calls no models and never reruns historical checks. Use a new output directory when judging under v3; historical reports and caches are preserved.
+This local audit calls no models and never reruns historical checks. Use a new output directory when judging under v5; historical reports and caches are preserved.
 
 - A **case** (`cases/<id>/`) fixes the starting point: a repo snapshot, the task and, for replay cases, the recorded agent sessions and resulting commits. [docs/cases.md](docs/cases.md)
 - A **system** (`src/systems/`) turns a case into a **PR artifact** (`src/schema/artifact.ts`). Systems run in a **sandbox** (`src/run/sandbox.ts`) with their own home directory holding only the case's sessions, a fake `gh` that captures PRs, and a local remote for pushes.
@@ -95,3 +167,30 @@ Implement `System` from `src/systems/types.ts` and register it in `src/systems/i
 ## License
 
 Apache-2.0
+
+## Reproducible comparisons (v2)
+
+`compare` defaults to the predeclared confirmation protocol: three samples per case/model/system, Sol and Terra at medium effort, two independent judges, and both orders. A selected real case needs `facts-provenance.json` before writers start; source references bind each fact to immutable code or session records. Facts and published descriptions are excluded from writer cache identities and never copied to writer sandboxes.
+
+```sh
+bun run prbench preflight --cases <dir> --split dev --out results/preflight.json
+bun run prbench compare --baseline-skill <dir> --candidate-skill <dir> --cases <dir> --out results/<experiment> --plan
+bun run prbench compare --baseline-skill <dir> --candidate-skill <dir> --cases <dir> --out results/<experiment> --replicates 3
+bun run prbench status --experiment results/<experiment>
+```
+
+Use `--resume` with the same frozen inputs to retain completed work, or `--report-only --resume` to refresh reports without model calls. `--purpose diagnostic --replicates 1` permits compatible cross-experiment writer reuse; diagnostic results never pass the adoption gate. Confirmation creates a fresh paired performance block. Stage cache reuse is explained by `--plan`; `--cache <dir>` selects its content-addressed store. Git revision is provenance, while effective stage inputs control reuse. Legacy comparison-v1 directories are read-only.
+
+After a fact-sheet or judge repair, `--reuse-from <inactive-dev-experiment>` retains its writer performance block only when writer inputs, controls, preparation, sampling and adoption policy still match. It does not turn diagnostic samples into confirmation samples. A stale experiment lock can be recovered with `--resume --recover-lock`; recovery verifies the experiment owner and requires that its recorded process has exited. It never terminates a process by PID.
+
+The maintained `calibrate-scope` and `admission` commands support fixed diagnostic stages with `--plan` and exact-input `--resume`. Performance report v2 requires comparable completed validation from captured artifact evidence; faster interrupted or unknown-work samples cannot establish a performance pass. See the [fixed completion protocol](docs/completion-round4.md) for call counts, recovery and promotion rules.
+
+Completed writer generations are cached before scope acceptance. After a scope-checker repair, `--resume` re-audits the same retained generation without another writer call. The original rejection remains in `.isolation-failure.json`; `.scope-audit.json` records the current decision, artifact digest and checker contract, with immutable decisions under `.scope-audits/`. A real scope violation still stops the comparison. Historical v1 drafts lack these recovery receipts and are not automatically promoted into a confirmation block.
+
+The experiment retains the harness source and build receipts with its frozen inputs. Confirmation candidates require protocol-2 dependency/compiler provenance and a matching native-output receipt. Implementation and executable identities are checked before new calls. Derived report versions remain under `derived-reports/`; refreshing the latest report preserves previous views and raw judgments.
+
+There is no total experiment deadline. Calls have a recorded timeout and at most three persisted provider attempts, including at most one format-correction request. Valid scores are never retried for a better result. Redacted private traces and attempt responses are retained before owned sandboxes are removed. Windows Job Objects and POSIX process groups limit teardown to the invocation. Shared rotating OAuth credentials remain serialized.
+
+Quality, efficiency, and operational status are separate. Accuracy flags from any order appear in `accuracy-findings.json`; adjudications live separately and require matching source hashes and ranges. Unresolved flags remain inconclusive. Performance uses fresh paired samples and case-clustered intervals; repeats are not additional independent cases. Token usage is not a USD estimate. Read [the implementation and evaluation record](docs/evaluation-round3.md).
+
+Exit codes: 0 completed/passed; 1 completed/failed gate; 2 incomplete or invalid; 3 completed/inconclusive; 130 cancelled. A valid failure finishes with a report. Held-out input preflight runs only after a matching development adoption gate passes.

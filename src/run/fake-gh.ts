@@ -49,6 +49,12 @@ const [a, b] = args;
 if (a === '--version') done('gh version 2.99.0 (prbench fake)\n');
 if (a === 'auth' && b === 'status') done('Logged in to github.com as prbench (fake)\n');
 if (a === 'api' && b === 'user') done(args.includes('--jq') ? 'prbench\n' : '{"login":"prbench"}\n');
+if (a === 'api' && b === `repos/${slug}`) {
+  const repo = { allow_squash_merge: true, squash_merge_commit_title: 'PR_TITLE', default_branch: 'main', permissions: { push: true } };
+  const query = flag('--jq');
+  if (query === '[.allow_squash_merge, .squash_merge_commit_title] | @tsv') done('true\tPR_TITLE\n');
+  if (!query) done(JSON.stringify(repo) + '\n');
+}
 if (a === 'repo' && b === 'view') {
   const json = flag('--json');
   if (!json) done(`${slug}\n`);

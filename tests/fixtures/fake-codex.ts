@@ -4,12 +4,13 @@ import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('codex-cli 9.8.7'); process.exit(0); }
-const prompt = readFileSync(0, 'utf8');
+const prompt = process.env.FAKE_CODEX_PROMPT ?? readFileSync(0, 'utf8');
 if (process.env.FAKE_CODEX_LOG) appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({
   args, prompt, home: process.env.HOME, codexHome: process.env.CODEX_HOME,
   authPresent: existsSync(join(process.env.CODEX_HOME!, 'auth.json')),
   apiKeyPresent: Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY),
   authSourceVisible: Boolean(process.env.PRBENCH_CODEX_AUTH_HOME),
+  parentCodexStateVisible: Object.keys(process.env).some(k => k.toUpperCase().startsWith('CODEX_') && k.toUpperCase() !== 'CODEX_HOME'),
   tracetoonOff: process.env.TRACETOON, tracetoonConfig: process.env.TRACETOON_CONFIG,
   cwd: process.cwd(),
 }) + '\n');
@@ -40,6 +41,6 @@ if (mode === 'failed') {
   console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'simulated provider failure' } }));
   process.exit(1);
 }
-if (args.includes('-o') && process.env.FAKE_CODEX_JUDGMENT) writeFileSync(args[args.indexOf('-o') + 1]!, process.env.FAKE_CODEX_JUDGMENT);
-console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }));
+if (args.includes('-o') && process.env.FAKE_CODEX_JUDGMENT && process.env.FAKE_CODEX_SKIP_OUTPUT_FILE !== '1') writeFileSync(args[args.indexOf('-o') + 1]!, process.env.FAKE_CODEX_JUDGMENT);
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: process.env.FAKE_CODEX_FINAL_MESSAGE ?? 'done' } }));
 console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, cached_input_tokens: 60, output_tokens: 20 } }));

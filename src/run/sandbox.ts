@@ -84,6 +84,14 @@ export function msysPath(path: string): string | undefined {
   return m ? `/${m[1]!.toLowerCase()}/${m[2]!.replace(/\\/g, '/')}` : undefined;
 }
 
+/** File URLs use the recorded path's syntax even when replay runs on another OS. */
+function fileUri(path: string): string | undefined {
+  const fwd = path.replace(/\\/g, '/');
+  if (!/^(?:[A-Za-z]:\/|\/)/.test(fwd)) return undefined;
+  const prefix = fwd.startsWith('//') ? 'file:' : fwd.startsWith('/') ? 'file://' : 'file:///';
+  return prefix + encodeURI(fwd).replace(/#/g, '%23').replace(/\?/g, '%3F');
+}
+
 /**
  * Rewrites recorded paths wherever they appear inside JSON strings, in each
  * spelling a Windows path takes in agent logs: native (C:\x), forward-slash
@@ -94,6 +102,8 @@ export function rewritePaths(jsonl: string, pairs: [from: string, to: string][])
   const esc = (s: string) => JSON.stringify(s).slice(1, -1);
   const map = new Map<string, string>();
   for (const [from, to] of pairs) {
+    const fromUri = fileUri(from), toUri = fileUri(to);
+    if (fromUri && toUri) map.set(esc(fromUri), esc(toUri));
     map.set(esc(from), esc(to));
     const fwd = from.replace(/\\/g, '/');
     if (fwd !== from) map.set(esc(fwd), esc(to.replace(/\\/g, '/')));
@@ -197,6 +207,10 @@ const DROPPED_ENV = [
   'CODEX_HOME',
   'CLAUDE_CONFIG_DIR',
   'TRACETOON_CONFIG',
+  'TRACETOON_BIN',
+  'TRACETOON_ASSETS',
+  'TRACETOON_LAUNCHER',
+  'TRACETOON_ALLOW_DOWNLOAD',
 ];
 
 function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: string }, c: Case): Record<string, string> {
@@ -205,7 +219,7 @@ function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: st
   // Windows env names are case-insensitive; drop every spelling of PATH first.
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
   const path = env[pathKey] ?? '';
-  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || DROPPED_ENV.includes(k)) delete env[k];
+  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || k.toUpperCase().startsWith('CODEX_') || DROPPED_ENV.includes(k.toUpperCase())) delete env[k];
   const appdata = join(sb.root, 'appdata');
   for (const d of ['roaming', 'local', 'config', 'data', 'state', 'cache']) mkdirSync(join(appdata, d), { recursive: true });
   Object.assign(env, {
@@ -308,7 +322,7 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
       dispose: () => removeDir(root),
     };
   } catch (err) {
-    removeDir(root);
+    try { removeDir(root); } catch { /* Preserve the creation error rather than masking it with cleanup. */ }
     throw err;
   }
 }

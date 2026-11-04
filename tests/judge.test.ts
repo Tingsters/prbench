@@ -404,9 +404,13 @@ describe('session evidence', () => {
     expect(e).not.toContain('Read'); // file reads are left out
   });
 
-  test('starts shortly before the base commit', () => {
+  test('labels earlier user context while excluding earlier commands and edits', () => {
     const { dir } = copyExample('later-base', (c) => (c.repo.baseTime = '2026-01-07T00:00:00Z'));
-    expect(sessionEvidence(loadCase(dir))).toBe('(no recorded sessions)');
+    const e = sessionEvidence(loadCase(dir));
+    expect(e).toContain('EARLIER USER CONTEXT: greet()');
+    expect(e).toContain('do not establish a causal request for each later fix');
+    expect(e).not.toContain('$ bun test');
+    expect(e).not.toContain('Files edited');
   });
 
   test('reads Codex rollouts', () => {
@@ -418,6 +422,98 @@ describe('session evidence', () => {
     const items = sessionItems(lines, 'codex');
     expect(items.map((i) => [i.kind, i.weight])).toEqual([['user', 3], ['command', 2]]);
     expect(items[1]!.result).toContain('3 passed; 0 failed');
+  });
+
+  test('retains paired Claude questions, option descriptions and complete answers', () => {
+    const lines = [
+      { type: 'assistant', timestamp: '2026-01-01T10:00:00Z', message: { content: [{ type: 'tool_use', id: 'q1', name: 'AskUserQuestion', input: { questions: [{ question: 'Which routes?', options: [{ label: 'All, test locally', description: 'Build both providers; exercise the local one live.' }] }] } }] } },
+      { type: 'user', timestamp: '2026-01-01T10:01:00Z', message: { content: [{ type: 'tool_result', tool_use_id: 'other', content: 'Unrelated answer' }] } },
+      { type: 'user', timestamp: '2026-01-01T10:02:00Z', message: { content: [{ type: 'tool_result', tool_use_id: 'q1', content: 'Question context '.repeat(40) + 'Answer: All, test locally' }] } },
+    ].map(l => JSON.stringify(l)).join('\n');
+    const items = sessionItems(lines, 'claude-code');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: 'decision', weight: 3, at: '2026-01-01T10:02:00Z' });
+    expect(items[0]!.text).toContain('Build both providers');
+    expect(items[0]!.result).toContain('Answer: All, test locally');
+    expect(items[0]!.result).not.toContain('Unrelated answer');
+  });
+
+  test('retains correlated Codex question answers without treating arbitrary outputs as decisions', () => {
+    const lines = [
+      { type: 'function_call', name: 'functions.request_user_input', call_id: 'q1', arguments: JSON.stringify({ questions: [{ question: 'Which route?' }] }) },
+      { type: 'function_call_output', call_id: 'other', output: 'Unexpected answer' },
+      { type: 'function_call_output', call_id: 'q1', output: { answers: { route: { answers: ['Local'] } } } },
+      { type: 'function_call', name: 'request_user_input', call_id: 'bad', arguments: 'not JSON' },
+      { type: 'function_call_output', call_id: 'bad', output: 'Not a decision' },
+    ].map(payload => JSON.stringify({ type: 'response_item', timestamp: '2026-01-01T10:00:00Z', payload })).join('\n');
+    const items = sessionItems(lines, 'codex');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: 'decision', weight: 3 });
+    expect(items[0]!.text).toContain('Which route?');
+    expect(items[0]!.result).toContain('Local');
+  });
+
+  test('retains typed async user replies, rejects malformed and non-user wrappers, and redacts secrets', () => {
+    const secret = 'sk-' + 'a'.repeat(24);
+    const reply = '<send_user_message_question_reply>\n' + JSON.stringify([{ question: 'Which route?', answer: `Local ${secret}` }]) + '\n</send_user_message_question_reply>';
+    const lines = [
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: reply }] },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: reply }] },
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<send_user_message_question_reply>[{"question":"Missing answer"}]' }] },
+      { type: 'function_call_output', call_id: 'orphan', output: reply },
+    ].map(payload => JSON.stringify({ type: 'response_item', timestamp: '2026-01-01T10:00:00Z', payload })).join('\n');
+    const items = sessionItems(lines, 'codex');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: 'decision', weight: 3 });
+    expect(items[0]!.text).toContain('Answer: Local [redacted]');
+    expect(JSON.stringify(items)).not.toContain(secret);
+  });
+
+  test('renders decisions as source evidence rather than shell commands', () => {
+    const { dir } = copyExample('decision-evidence', c => { c.sessions = [{ agent: 'claude-code', file: 'decisions.jsonl', cwd: '/work/greet' }]; });
+    writeFileSync(join(dir, 'decisions.jsonl'), [
+      { type: 'assistant', timestamp: '2026-01-06T10:00:00Z', message: { content: [{ type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: { questions: [{ question: 'Which route?' }] } }] } },
+      { type: 'user', timestamp: '2026-01-06T10:01:00Z', message: { content: [{ type: 'tool_result', tool_use_id: 'q', content: 'Selected Local' }] } },
+    ].map(l => JSON.stringify(l)).join('\n'));
+    const e = sessionEvidence(loadCase(dir));
+    expect(e).toContain('[S1] [10:01] RECORDED Q&A:');
+    expect(e).toContain('Which route?');
+    expect(e).toContain('-> Selected Local');
+    expect(e).not.toContain('$ ');
+  });
+
+  test('prioritizes current requests over earlier context when the excerpt is full', () => {
+    const { dir } = copyExample('context-priority', c => {
+      c.repo.baseTime = '2026-01-06T10:00:00Z';
+      c.sessions = [{ agent: 'claude-code', file: 'context.jsonl', cwd: '/work/greet' }];
+    });
+    const previous = 'Previous task ' + 'x'.repeat(120);
+    writeFileSync(join(dir, 'context.jsonl'), [
+      { type: 'user', timestamp: '2026-01-06T09:30:00Z', message: { content: previous } },
+      { type: 'assistant', timestamp: '2026-01-06T09:31:00Z', message: { content: [{ type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: { questions: [{ question: 'Earlier choice?' }] } }] } },
+      { type: 'user', timestamp: '2026-01-06T09:32:00Z', message: { content: [{ type: 'tool_result', tool_use_id: 'q', content: 'Selected Local' }] } },
+      { type: 'user', timestamp: '2026-01-06T10:01:00Z', message: { content: 'Current scoped request ' + 'y'.repeat(60) } },
+    ].map(l => JSON.stringify(l)).join('\n'));
+    const loaded = loadCase(dir);
+    const full = sessionEvidence(loaded);
+    expect(full).toContain('EARLIER USER CONTEXT: ' + previous);
+    expect(full).toContain('EARLIER RECORDED Q&A:');
+    const bounded = sessionEvidence(loaded, 550);
+    expect(bounded).toContain('USER: Current scoped request');
+    expect(bounded).not.toContain(previous);
+  });
+
+  test('does not label compaction recaps or provider metadata as user requests', () => {
+    const content = 'This session is being continued from a previous conversation that ran out of context. Summary: user asked for everything.';
+    const lines = [
+      { type: 'user', isCompactSummary: true, message: { content: 'A recap with no prefix' } },
+      { type: 'user', message: { content } },
+      { type: 'user', isMeta: true, message: { content: 'Injected setup' } },
+      { type: 'user', message: { content: 'Actual request' } },
+    ].map(x => JSON.stringify({ timestamp: '2026-01-01T10:00:00Z', ...x })).join('\n');
+    expect(sessionItems(lines, 'claude-code').map(i => i.text)).toEqual(['Actual request']);
+    const codex = JSON.stringify({ type: 'response_item', timestamp: '2026-01-01T10:00:00Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: content }] } });
+    expect(sessionItems(codex, 'codex')).toEqual([]);
   });
 
   test('the prompt carries the evidence and the preparation note', () => {

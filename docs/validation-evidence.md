@@ -1,4 +1,6 @@
-# Validation evidence and rubric v3
+Rubric v5 preserves the v4 evidence meanings documented below. It adds independent checks of clauses, fallback qualifications, and the ownership of named review locations. Comparison-v2 retains raw order judgments and separate source-backed adjudications; unknown capture remains unknown. Runtime counters and declared workflow roles are diagnostic metadata, not validation outcomes.
+
+# Validation evidence and rubric v4
 
 A writer can run checks while preparing a PR, after the original work sessions ended. Rubric v2 supplied judges only the original sessions and required those sessions to establish claimed passes. Consequently, some historical `unsupportedClaims` describe a judge evidence gap. Those counts must not be described as fabrication rates, or used to conclude that writers should omit accurate fresh results.
 
@@ -7,6 +9,8 @@ A writer can run checks while preparing a PR, after the original work sessions e
 `PRArtifact.validation` is an optional, provider-neutral `prbench.validation/v1` record. The artifact remains `prbench.artifact/v1` so legacy artifacts can be loaded; an absent validation field means unavailable evidence. Metrics consume this field and never inspect Tracetoon receipts or another system's private files.
 
 Both provider runners use the same capture module. Codex command-execution events and Claude streaming tool-use/results supply execution evidence. Claude uses `--output-format stream-json --verbose`; final result accounting remains separate. The collector also reads newly created or appended session logs, including nested sessions, before sandbox disposal. It excludes the original copied session bytes, rewritten original files and persisted events outside the actual writer-run time window. Unreadable, malformed, untimed or oversized fresh traces become explicit gaps. Final model messages and self-reviews cannot create a command record.
+
+When a live Codex execution omits its directory, static tool arguments in the same writer's rollout can supply it through a unique command/time correlation. If `workdir` was omitted, only that rollout's recorded `turn_context.cwd` supplies the tool default. This is labeled by `cwdSource`. Dynamic arguments, ambiguous matches and missing context stay unknown. Transcript code is never evaluated, and original copied executions remain excluded. Child runs do not inherit parent Codex session, daemon or control variables.
 
 Each execution retains a neutral source reference, command, cwd, available start/completion times, exit code when explicitly recorded, outcome, bounded redacted output and a digest of the redacted output stream. Long-running shell calls are joined to later poll results. Tool completion with no numeric exit code remains distinct from exit zero; neither an agent turn completion nor a wrapper exit proves that the described suite passed. Failures, incomplete executions, timeouts and truncation remain visible. Capture is limited to 500 executions, 24,000 output characters per execution and 32 MiB per persisted trace; omissions are recorded. Future adapters must supply the same evidence contract.
 
@@ -22,18 +26,20 @@ The packet distinguishes shared original work-session evidence from description 
 
 Judges assess every validation claim and disputed claim using four statuses:
 
-| Status | Meaning | Aggregate treatment |
-|---|---|---|
-| `supported` | Positive evidence establishes the claim at its stated scope | Verified claim assessment |
-| `contradicted` | Specific evidence conflicts at the relevant time, content and environment | `factualErrors` |
-| `unsupported` | A scope overclaim, such as a universal guarantee from a narrow check | `unsupportedClaims` |
-| `unverifiable` | Missing, partial or truncated evidence prevents assessment | Separate evidence-gap count |
+| Status         | Meaning                                                                   | Aggregate treatment         |
+| -------------- | ------------------------------------------------------------------------- | --------------------------- |
+| `supported`    | Positive evidence establishes the claim at its stated scope               | Verified claim assessment   |
+| `contradicted` | Specific evidence conflicts at the relevant time, content and environment | `factualErrors`             |
+| `unsupported`  | A scope overclaim, such as a universal guarantee from a narrow check      | `unsupportedClaims`         |
+| `unverifiable` | Missing, partial or truncated evidence prevents assessment                | Separate evidence-gap count |
 
 Each assessment records the exact claim, reason and evidence references. Supported, contradicted and unsupported assessments require references. The validator rejects nonexistent, omitted and opposite-side fresh references, error lists that do not match assessments, and inconsistent abstentions. Reference allow-lists come from structured evidence, never from headings a writer could insert into PR text or command output. A contradiction establishes an error, not intent; no fabrication rate is inferred.
 
+Rubric v4 adds `A.V0` and `B.V0` as references to each capture summary and its recording/packet limits. They are not execution receipts and cannot prove a check passed, failed or did not run. `A_VALIDATION` and `B_VALIDATION` remain delimiters, not citation IDs. The four assessment statuses and the distinction between missing evidence and an overclaim are retained.
+
 Do not count missing receipts as factual errors or unsupported overclaims, credit missing results as verified, or demand deletion of accurate validation statements. Assess other available content normally; an evidence gap does not automatically force a tie. If preference depends on resolving the gap, the judge returns `inconclusive` with `preferenceDependsOnMissingEvidence=true`. Either order abstaining makes the pair inconclusive. Consensus retains an abstention from any configured judge. Inconclusive comparisons are counted explicitly and excluded from wins, ties, sign tests, bootstrap means/intervals and judge agreement. Null rubric scores denote items that cannot be assessed.
 
-Reports show evidence-gap counts separately from factual errors and overclaims, plus per-system artifact coverage. They retain incomplete judge coverage separately. Rubric v3 prompt hashes include a digest of the whole fresh evidence bundle, even when some records are omitted from the excerpt, and the explicit version; order caches live under `judgments/v3/`. Generated pair results also bind each artifact's digest: rebuilding a report with changed drafts or evidence requires rejudging. External result imports without those digests receive an explicit provenance warning. Report generation rejects legacy/mixed result versions, and judging refuses to overwrite a directory containing historical reports/plans/results. Preserve v2 reports as historical and use a new output directory for v3.
+Reports show evidence-gap counts separately from factual errors and overclaims, plus per-system artifact coverage. They retain incomplete judge coverage separately. Rubric v4 prompt hashes include a digest of the whole fresh evidence bundle, even when some records are omitted from the excerpt, and the explicit version; order caches live under `judgments/v4/`. Generated pair results also bind each artifact's digest: rebuilding a report with changed drafts or evidence requires rejudging. External result imports without those digests receive an explicit provenance warning. Report generation rejects legacy/mixed result versions, and judging refuses to overwrite a directory containing historical reports/plans/results. Preserve v2/v3 reports as historical and use a new output directory for v4.
 
 ## Auditing historical runs
 
@@ -50,13 +56,17 @@ If authentic logs survived, supply `--recovery-manifest manifest.local.json` wit
 ```json
 {
   "schema": "prbench.recovery/v1",
-  "entries": [{
-    "case": "case-id",
-    "system": "system-id",
-    "artifactSha256": "sha256-of-original-artifact-file",
-    "repoPath": "/original/writer/sandbox/work/repo",
-    "sessions": [{"file": "writer-session.jsonl", "sha256": "sha256-of-session-file"}]
-  }]
+  "entries": [
+    {
+      "case": "case-id",
+      "system": "system-id",
+      "artifactSha256": "sha256-of-original-artifact-file",
+      "repoPath": "/original/writer/sandbox/work/repo",
+      "sessions": [
+        { "file": "writer-session.jsonl", "sha256": "sha256-of-session-file" }
+      ]
+    }
+  ]
 }
 ```
 
@@ -65,5 +75,13 @@ Session paths are relative to the manifest or absolute. Recovery verifies source
 Where recovered evidence supports reassessment, rejudge the same copied drafts with the normal `judge` command, pointing `--artifacts` to the audit's `artifacts/` and `--out` to a separate v3 results directory. That command calls configured model judges. Keep old and new reports separate and review changed findings, remaining gaps and position flips. Without recovered logs, an audit cannot resolve historical fresh-check claims or produce corrected fabrication/error rates. A new writer benchmark would be a separate cohort, not a reconstruction of the old executions.
 
 ## Verification and remaining calibration
+
+Comparison-v2 adjudication can cite an immutable code/session/commit source or a
+captured fresh command. A fresh-command proof uses `kind: "validation"`, the
+flagged candidate's `artifactDigest`, an actual `commandId` such as `V1`, and the
+SHA-256 and line range of `JSON.stringify(command, null, 2)`. Cross-artifact proofs,
+changed bytes, invalid ranges and `V0` recording summaries are rejected. A matching
+source establishes integrity; the recorded reviewer and rationale determine the
+semantic conclusion. Adjudication never overwrites the raw judge response.
 
 Synthetic tests cover true fresh passes absent from original sessions, fresh failures, changed/unknown content, missing receipts, incomplete and canceled commands, output truncation, polling, copied-log exclusion, redaction, reference spoofing, both A/B orders, cache invalidation, report abstention/coverage, and recovery provenance. Provider fixtures execute actual case tests through both native and tool flows and verify evidence survives into artifacts. These verify the evaluator's plumbing and constraints; they do not establish a real judge's semantic reliability. Human and cross-family calibration remain necessary under the methodology's development/held-out protocol.

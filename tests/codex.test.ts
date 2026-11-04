@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { codexAuthHome, withCodexAuth } from '../src/agents/codexAuth.ts';
+import { codexAuthHome, codexRunEnv, withCodexAuth } from '../src/agents/codexAuth.ts';
 import { codexTerminalEvent, parseCodexResult } from '../src/agents/codex.ts';
 import { loadCase } from '../src/schema/case.ts';
 import { runCase } from '../src/run/runner.ts';
@@ -29,12 +29,15 @@ beforeAll(() => {
   const skill = tempDir(); writeFileSync(join(skill, 'SKILL.md'), '# test skill'); writeFileSync(join(skill, 'VERSION'), '0.0.0-test');
   env({ PRBENCH_CODEX_AUTH_HOME: auth, PRBENCH_CODEX_COMMAND: JSON.stringify([process.execPath, join(import.meta.dir, 'fixtures', 'fake-codex.ts')]),
     PRBENCH_TRACETOON_COMMAND: JSON.stringify([process.execPath, join(import.meta.dir, 'fixtures', 'fake-tracetoon.ts')]),
-    PRBENCH_TRACETOON_SKILL: skill, FAKE_CODEX_LOG: log, OPENAI_API_KEY: 'test-only-unused' });
+    PRBENCH_TRACETOON_SKILL: skill, FAKE_CODEX_LOG: log, OPENAI_API_KEY: 'test-only-unused', CODEX_SESSION_ID: 'test-only-parent', CODEX_THREAD_ID: 'test-only-thread', CODEX_DAEMON_SHUTDOWN_FILE: 'test-only-control' });
 });
 afterAll(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
 const calls = () => readFileSync(log, 'utf8').trim().split('\n').map((s) => JSON.parse(s));
 
 describe('Codex credentials', () => {
+  test('child environments retain only their explicit Codex home', () => {
+    expect(codexRunEnv({ CODEX_HOME: 'sandbox-home', CODEX_SESSION_ID: 'parent', CODEX_THREAD_ID: 'parent-thread', CODEX_DAEMON_SHUTDOWN_SOCKET: 'parent-control', OPENAI_API_KEY: 'unused', OTHER: 'safe' })).toEqual({ CODEX_HOME: 'sandbox-home', OTHER: 'safe' });
+  });
   test('separate cache, serialized refreshes and cleanup on failure', async () => {
     const source = tempDir(); writeFileSync(join(source, 'auth.json'), '{"generation":1}');
     const first = tempDir(), second = tempDir();
@@ -83,13 +86,15 @@ describe('Codex systems', () => {
     const plugin = calls().at(-1);
     for (const call of [baseline, plugin]) {
       expect(call.prompt).toBe(PR_PROMPT);
-      expect(call.args).toEqual(expect.arrayContaining(['--model', 'gpt-6.1-sol', 'model_reasoning_effort="medium"', '--ignore-user-config', 'apps', 'apps._default.enabled=false', 'browser_use', 'computer_use']));
+      expect(call.args).toEqual(expect.arrayContaining(['--model', 'gpt-6.1-sol', 'model_reasoning_effort="medium"', '--ignore-user-config', 'apps', 'apps._default.enabled=false', 'browser_use', 'computer_use', 'skip_host_skill_discovery', 'remote_plugin']));
       expect(call.authPresent).toBe(true); expect(call.apiKeyPresent).toBe(false); expect(call.authSourceVisible).toBe(false);
+      expect(call.parentCodexStateVisible).toBe(false);
       expect(call.home).not.toBe(process.env.HOME);
       expect(existsSync(join(call.codexHome, 'auth.json'))).toBe(false);
     }
     expect(baseline.tracetoonOff).toBe('0'); expect(plugin.tracetoonOff).toBeUndefined();
-    expect(existsSync(join(tool.sandboxRoot!, 'home', '.agents', 'skills', 'tracetoon', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(plugin.cwd, '.agents', 'skills', 'tracetoon', 'SKILL.md'))).toBe(true);
+    expect(exec(['git', 'status', '--porcelain'], { cwd: plugin.cwd }).stdout).toBe('');
     expect(existsSync(join(tool.sandboxRoot!, 'codex', 'hooks.json'))).toBe(true);
     expect(native.artifact.meta).toMatchObject({ agent: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'medium', toolVersion: '9.8.7', inputTokens: 100, outputTokens: 20 });
     expect(native.artifact.meta.costUsd).toBeUndefined();
@@ -111,6 +116,9 @@ describe('Codex systems', () => {
 });
 
 test('Codex usage does not double-count cached input, and failed turns remain errors', () => {
+  expect(parseCodexResult('{"type":"turn.completed"}').inputTokens).toBeUndefined();
+  expect(parseCodexResult('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}\n{"type":"turn.completed"}').inputTokens).toBeUndefined();
+  expect(parseCodexResult('{"type":"turn.completed","usage":{"input_tokens":0,"output_tokens":0}}')).toMatchObject({inputTokens:0,outputTokens:0});
   expect(parseCodexResult('{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":60,"output_tokens":5}}')).toMatchObject({ inputTokens: 100, outputTokens: 5 });
   expect(parseCodexResult('{"type":"turn.failed","error":{"message":"unavailable"}}')).toMatchObject({ isError: true, result: 'unavailable' });
 });
@@ -192,4 +200,17 @@ test('dev-only judging excludes held-out artifacts and saves the selected scope'
   const pairs = JSON.parse(readFileSync(join(output, 'pairs.json'), 'utf8'));
   expect(pairs).toHaveLength(1); expect(pairs[0].case).toBe('development');
   expect(calls().slice(-2).some((call) => call.prompt.includes('DO NOT JUDGE THIS CASE'))).toBe(false);
+});
+
+test('judges retain the completed stream reply when the CLI output file is missing', async () => {
+  const reply = JSON.stringify({ retained: 'completed structured stream' });
+  env({ FAKE_CODEX_MODE: 'nothing', FAKE_CODEX_SKIP_OUTPUT_FILE: '1', FAKE_CODEX_FINAL_MESSAGE: reply });
+  try {
+    expect((await parseJudge('codex:gpt-6.1-sol@medium').ask('Synthetic diagnostic')).text).toBe(reply);
+    env({ FAKE_CODEX_FINAL_MESSAGE: '' });
+    await expect(parseJudge('codex:gpt-6.1-sol@medium').ask('Synthetic missing reply')).rejects.toThrow('no structured reply');
+    expect(existsSync(join(auth, 'prbench.lock'))).toBe(false);
+  } finally {
+    env({ FAKE_CODEX_SKIP_OUTPUT_FILE: '0', FAKE_CODEX_FINAL_MESSAGE: 'done' });
+  }
 });

@@ -2,12 +2,12 @@
 // tools off, hooks off and no saved session, from an empty temp directory, so
 // a judging call can't touch the user's repositories or show up as work in
 // their session logs.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JUDGMENT_SCHEMA } from './rubric.ts';
 import { codexCommand, codexRunEnv, withCodexAuth } from '../agents/codexAuth.ts';
-import { codexTerminalEvent, reasoningEffort, type ReasoningEffort } from '../agents/codex.ts';
+import { codexTerminalEvent, parseCodexResult, reasoningEffort, type ReasoningEffort } from '../agents/codex.ts';
 import { runAgentProcess } from '../agents/process.ts';
 
 export interface JudgeReply {
@@ -87,7 +87,12 @@ export function codexJudge(model?: string, timeoutMs = 15 * 60_000, effort?: Rea
         const ask = async (env?: Record<string, string | undefined>) => {
           const r = await runAgentProcess(cmd, { prompt, cwd: dir, timeoutMs, env, terminalEvent: effort ? codexTerminalEvent : undefined });
           if (r.exitCode !== 0) throw new Error(`codex judge failed (${r.exitCode}): ${(r.stderr || r.stdout).slice(-800)}`);
-          return { text: readFileSync(out, 'utf8') };
+          const parsed = effort ? parseCodexResult(r.stdout) : undefined;
+          if (parsed?.isError) throw new Error(`codex judge reported a failed turn: ${parsed.result?.slice(-800) ?? 'no detail'}`);
+          const text = existsSync(out) ? readFileSync(out, 'utf8') : parsed?.result;
+          if (!text?.trim()) throw new Error(`codex judge produced no structured reply: ${(r.stderr || r.stdout).slice(-800)}`);
+          // The pairwise layer still validates JSON, the schema and evidence references.
+          return { text };
         };
         if (!effort) return ask(); // Preserve the legacy codex[:model] judge contract/cache.
         const home = join(dir, 'home');
