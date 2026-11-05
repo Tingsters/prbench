@@ -24,7 +24,8 @@ jobs:
       - name: Install the source package outside the checkout
         shell: bash
         run: |
-          bun pm pack --filename prbench.tgz --destination results/package
+          mkdir -p results/package
+          bun pm pack --filename results/package/prbench.tgz
           bun install --global ./results/package/prbench.tgz
           bun pm bin --global >> "$GITHUB_PATH"
       - name: Download and verify without authentication or models
