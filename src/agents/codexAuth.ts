@@ -7,7 +7,10 @@ import {
   mkdirSync,
   openSync,
   closeSync,
+  lstatSync,
+  readdirSync,
   readFileSync,
+  symlinkSync,
   realpathSync,
   renameSync,
   statSync,
@@ -87,7 +90,19 @@ export function codexRunEnv(
 /** Interactive CLI entry point: credentials and browser URLs stay in the user's terminal. */
 export function codexLogin(status = false, deviceAuth = false): number {
   const dir = codexAuthHome();
-  if (!status && existsSync(join(dir, "prbench.lock")))
+  const leased = existsSync(dir)
+    ? readdirSync(dir).some((name) => {
+        const m = /^prbench-shared-(\d+)\.lease$/.exec(name);
+        if (!m) return false;
+        try {
+          process.kill(Number(m[1]), 0);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+    : false;
+  if (!status && (leased || existsSync(join(dir, "prbench.lock"))))
     throw new Error(
       "A benchmark holds this Codex login cache. Let it finish before signing in again.",
     );
@@ -162,6 +177,78 @@ async function acquire(lock: string, timeoutMs: number): Promise<() => void> {
   }
 }
 
+let sharedLogin = false;
+
+/**
+ * Parallel runs share one login file instead of serializing on a copy. Each
+ * sandbox's `auth.json` is a symlink to the dedicated cache, the way several
+ * interactive Codex sessions share `~/.codex/auth.json`: Codex refreshes and
+ * rotates tokens in place through the link, so no copy can go stale. Verified
+ * with codex-cli 0.164 under three concurrent forced refreshes. Windows keeps
+ * the exclusive copy mode (symlinks need extra privileges there).
+ */
+export function setCodexLoginSharing(on: boolean): void {
+  sharedLogin = on && process.platform !== "win32";
+}
+
+export function codexLoginSharing(): boolean {
+  return sharedLogin;
+}
+
+function leaseFile(sourceDir: string): string {
+  return join(sourceDir, `prbench-shared-${process.pid}.lease`);
+}
+
+async function withSharedCodexAuth<T>(
+  sourceDir: string,
+  target: string,
+  destination: string,
+  fn: () => Promise<T>,
+  onAcquired?: (waitMs: number) => void,
+): Promise<T> {
+  const waiting = performance.now();
+  // The lock only orders link creation against `prbench auth codex`; the run
+  // itself holds a per-controller lease so a sign-in cannot replace the file
+  // underneath it.
+  const release = await acquire(join(sourceDir, "prbench.lock"), 60_000);
+  try {
+    writeFileSync(leaseFile(sourceDir), JSON.stringify({ pid: process.pid }), {
+      mode: 0o600,
+    });
+    mkdirSync(destination, { recursive: true, mode: 0o700 });
+    if (lstatExists(target)) unlinkSync(target);
+    symlinkSync(join(sourceDir, "auth.json"), target);
+  } finally {
+    release();
+  }
+  onAcquired?.(performance.now() - waiting);
+  try {
+    return await fn();
+  } finally {
+    if (lstatExists(target)) unlinkSync(target);
+  }
+}
+
+function lstatExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove this controller's shared-login lease (call once its runs are done). */
+export function releaseCodexLoginLease(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  try {
+    unlinkSync(leaseFile(codexAuthHome(env)));
+  } catch {
+    /* none held */
+  }
+}
+
 /** Returns refreshed credentials even on run failure, then removes the sandbox copy. */
 export async function withCodexAuth<T>(
   destination: string,
@@ -180,6 +267,14 @@ export async function withCodexAuth<T>(
     );
   if (canonical(destination) === canonical(sourceDir))
     throw new Error("The Codex run must have its own sandbox CODEX_HOME.");
+  if (sharedLogin)
+    return withSharedCodexAuth(
+      sourceDir,
+      join(destination, "auth.json"),
+      destination,
+      fn,
+      opts.onAcquired,
+    );
   const waiting = performance.now();
   const release = await acquire(
     join(sourceDir, "prbench.lock"),

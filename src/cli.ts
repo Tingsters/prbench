@@ -18,6 +18,8 @@ import { judgePair, type PairResult } from "./judge/pairwise.ts";
 import { parseJudge } from "./judge/providers.ts";
 import { buildReport, reportMarkdown } from "./report.ts";
 import { codexLogin } from "./agents/codexAuth.ts";
+import { claudeAuthStatus, saveClaudeToken } from "./agents/claude.ts";
+import { runBothProviders } from "./run/both.ts";
 import { DEFAULT_CODEX_OPTIONS } from "./systems/codex.ts";
 import { RUBRIC_VERSION } from "./judge/rubric.ts";
 import { auditEvidence } from "./audit.ts";
@@ -28,7 +30,13 @@ import { experimentStatus } from "./run/status.ts";
 import { preflight } from "./run/preflight.ts";
 import { calibrateScope } from "./calibration.ts";
 import { admission } from "./admission.ts";
-import { datasetReleases, datasetRelease, defaultDataset, installDataset, resolveDatasetInputs } from "./datasets.ts";
+import {
+  datasetReleases,
+  datasetRelease,
+  defaultDataset,
+  installDataset,
+  resolveDatasetInputs,
+} from "./datasets.ts";
 
 const program = new Command("prbench")
   .version(version)
@@ -56,16 +64,31 @@ const list = (s: string) =>
     .map((x) => x.trim())
     .filter(Boolean);
 
-const datasets = program.command("datasets").description("List and download versioned public case libraries without model calls");
+const datasets = program
+  .command("datasets")
+  .description(
+    "List and download versioned public case libraries without model calls",
+  );
 datasets.command("list").action(() => {
-  for (const d of datasetReleases) console.log(`${d.id}@${d.version}  dev=${d.cases.dev.length} test=${d.cases.test.length}  ${d.description}`);
+  for (const d of datasetReleases)
+    console.log(
+      `${d.id}@${d.version}  dev=${d.cases.dev.length} test=${d.cases.test.length}  ${d.description}`,
+    );
 });
-datasets.command("fetch")
+datasets
+  .command("fetch")
   .argument("[dataset]", "pinned dataset id@version", defaultDataset)
-  .option("--out <dir>", "install into a new directory instead of the shared cache")
+  .option(
+    "--out <dir>",
+    "install into a new directory instead of the shared cache",
+  )
   .action(async (spec: string, opts: { out?: string }) => {
-    const path = opts.out ? await installDataset(datasetRelease(spec), opts.out) : (await resolveDatasetInputs({ dataset: spec })).cases;
-    console.log(`Dataset verified: ${spec}\nCases: ${path}\nPreparation: ${join(path, 'preparation.json')}`);
+    const path = opts.out
+      ? await installDataset(datasetRelease(spec), opts.out)
+      : (await resolveDatasetInputs({ dataset: spec })).cases;
+    console.log(
+      `Dataset verified: ${spec}\nCases: ${path}\nPreparation: ${join(path, "preparation.json")}`,
+    );
   });
 
 program
@@ -120,7 +143,7 @@ program
 program
   .command("compare")
   .description(
-    "Freeze and compare native Codex, baseline Tracetoon and candidate Tracetoon",
+    "Freeze and compare the provider's native agent, baseline Tracetoon and candidate Tracetoon",
   )
   .requiredOption(
     "--baseline-skill <dir>",
@@ -131,7 +154,10 @@ program
     "candidate skill with matching platform binary",
   )
   .option("--cases <dir>", "local case directory")
-  .option("--dataset <id@version>", "public dataset; defaults to the pinned release when --cases is omitted")
+  .option(
+    "--dataset <id@version>",
+    "public dataset; defaults to the pinned release when --cases is omitted",
+  )
   .requiredOption("--out <dir>", "new experiment directory")
   .option("--split <split>", "dev or test", "dev")
   .option("--preparation <file>", "explicit per-case preparation profile")
@@ -170,16 +196,38 @@ program
     "rebuild a v2 report with no model calls; requires --resume",
   )
   .option("--timeout-ms <ms>", "explicit per-process hung-job timeout", Number)
-  .action(async (opts: Omit<CompareOptions, 'cases'> & { cases?: string; dataset?: string }) => {
-    try {
-      const inputs = await resolveDatasetInputs(opts);
-      const result = await compare({ ...opts, ...inputs });
-      if ("exitCode" in result) process.exitCode = result.exitCode;
-    } catch (error) {
-      console.error(String(error));
-      process.exitCode = 2;
-    }
-  });
+  .option(
+    "--provider <provider>",
+    "codex (Codex writes and judges), claude (Claude Code writes and judges) or both (two independent runs in <out>/codex and <out>/claude)",
+    "codex",
+  )
+  .option(
+    "--parallel <n>",
+    "concurrent writer/judge jobs per provider (1 keeps the serial order)",
+    Number,
+    4,
+  )
+  .action(
+    async (
+      opts: Omit<CompareOptions, "cases"> & {
+        cases?: string;
+        dataset?: string;
+      },
+    ) => {
+      if (opts.provider === "both") {
+        process.exitCode = await runBothProviders(process.argv.slice(2));
+        return;
+      }
+      try {
+        const inputs = await resolveDatasetInputs(opts);
+        const result = await compare({ ...opts, ...inputs });
+        if ("exitCode" in result) process.exitCode = result.exitCode;
+      } catch (error) {
+        console.error(String(error));
+        process.exitCode = 2;
+      }
+    },
+  );
 
 program
   .command("cleanup")
@@ -204,43 +252,88 @@ program
 program
   .command("preflight")
   .option("--cases <dir>", "local case directory")
-  .option("--dataset <id@version>", "public dataset; defaults to the pinned release")
+  .option(
+    "--dataset <id@version>",
+    "public dataset; defaults to the pinned release",
+  )
   .option("--split <split>", "selected split", "dev")
   .option("--out <file>", "save evidence preview")
-  .action(async (opts: { cases?: string; dataset?: string; split: string; out?: string }) => {
-    if (!["dev", "test"].includes(opts.split))
-      throw new Error("Split must be dev or test.");
-    if (opts.split === "test")
-      throw new Error(
-        "Held-out preflight runs only through compare after the development gate passes.",
+  .action(
+    async (opts: {
+      cases?: string;
+      dataset?: string;
+      split: string;
+      out?: string;
+    }) => {
+      if (!["dev", "test"].includes(opts.split))
+        throw new Error("Split must be dev or test.");
+      if (opts.split === "test")
+        throw new Error(
+          "Held-out preflight runs only through compare after the development gate passes.",
+        );
+      const inputs = await resolveDatasetInputs(opts);
+      const selected = caseDirs(resolve(inputs.cases))
+        .map(loadCase)
+        .filter((l) => l.case.split === opts.split && !l.case.excluded);
+      const result = preflight(selected, {
+        cache: resolve(
+          import.meta.dir,
+          "../node_modules/.cache/prbench-preflight",
+        ),
+        out: opts.out,
+      });
+      console.log(
+        JSON.stringify(
+          {
+            ...result,
+            cases: result.cases.map(
+              ({ neutralEvidence: _privateEvidence, ...summary }) => summary,
+            ),
+          },
+          null,
+          2,
+        ),
       );
-    const inputs = await resolveDatasetInputs(opts);
-    const selected = caseDirs(resolve(inputs.cases))
-      .map(loadCase)
-      .filter((l) => l.case.split === opts.split && !l.case.excluded);
-    const result = preflight(selected, {
-          cache: resolve(
-            import.meta.dir,
-            "../node_modules/.cache/prbench-preflight",
-          ),
-          out: opts.out,
-        });
-    console.log(JSON.stringify({ ...result, cases: result.cases.map(({ neutralEvidence: _privateEvidence, ...summary }) => summary) }, null, 2));
-  });
+    },
+  );
 
 program
   .command("auth")
-  .description("Sign in to the separate Codex benchmark login cache")
-  .argument("<agent>", "codex")
+  .description(
+    "Set up the separate benchmark login: Codex signs in through the browser; Claude stores a `claude setup-token` token read from stdin",
+  )
+  .argument("<agent>", "codex or claude")
   .option("--status", "show the benchmark login status")
-  .option("--device-auth", "use device-code login instead of browser callback")
-  .action((agent: string, opts: { status?: boolean; deviceAuth?: boolean }) => {
-    if (agent !== "codex")
-      throw new Error(
-        "Only Codex uses this login command; Claude uses its existing token setup.",
-      );
-    process.exitCode = codexLogin(opts.status, opts.deviceAuth);
-  });
+  .option(
+    "--device-auth",
+    "Codex: use device-code login instead of browser callback",
+  )
+  .action(
+    async (agent: string, opts: { status?: boolean; deviceAuth?: boolean }) => {
+      if (agent === "codex") {
+        process.exitCode = codexLogin(opts.status, opts.deviceAuth);
+        return;
+      }
+      if (agent !== "claude") throw new Error("Use codex or claude.");
+      if (opts.status) {
+        const status = claudeAuthStatus();
+        console.log(
+          status.ok
+            ? `Benchmark Claude login: ${status.source}`
+            : "No benchmark Claude login. Run `claude setup-token`, then pipe the token into `prbench auth claude`.",
+        );
+        process.exitCode = status.ok ? 0 : 1;
+        return;
+      }
+      if (process.stdin.isTTY)
+        console.error(
+          "Paste the token printed by `claude setup-token`, then press Enter and Ctrl-D.",
+        );
+      const token = (await Bun.stdin.text()).trim();
+      const file = saveClaudeToken(token);
+      console.log(`Saved the benchmark Claude token to ${file} (mode 0600).`);
+    },
+  );
 
 /** Runs `tasks` with at most `limit` in flight, reporting failures instead of stopping. */
 async function pool<T>(

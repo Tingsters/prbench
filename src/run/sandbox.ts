@@ -211,7 +211,12 @@ const DROPPED_ENV = [
   'TRACETOON_ASSETS',
   'TRACETOON_LAUNCHER',
   'TRACETOON_ALLOW_DOWNLOAD',
+  // Claude Code reads these from the parent (a host session, its login or its
+  // settings); runs add back only the chosen credentials.
+  'CLAUDECODE',
+  'PRBENCH_CLAUDE_OAUTH_TOKEN',
 ];
+const DROPPED_PREFIXES = ['CODEX_', 'ANTHROPIC_', 'CLAUDE_CODE_'];
 
 function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: string }, c: Case): Record<string, string> {
   const env: Record<string, string> = {};
@@ -219,7 +224,7 @@ function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: st
   // Windows env names are case-insensitive; drop every spelling of PATH first.
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
   const path = env[pathKey] ?? '';
-  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || k.toUpperCase().startsWith('CODEX_') || DROPPED_ENV.includes(k.toUpperCase())) delete env[k];
+  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || DROPPED_PREFIXES.some((p) => k.toUpperCase().startsWith(p)) || DROPPED_ENV.includes(k.toUpperCase())) delete env[k];
   const appdata = join(sb.root, 'appdata');
   for (const d of ['roaming', 'local', 'config', 'data', 'state', 'cache']) mkdirSync(join(appdata, d), { recursive: true });
   Object.assign(env, {

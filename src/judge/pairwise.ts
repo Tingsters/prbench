@@ -31,6 +31,7 @@ import {
   retryDelay,
 } from "../run/ledger.ts";
 import { redactEvidence } from "../agents/validation.ts";
+import { abortableSleep, cancellationSignal } from "../run/cancellation.ts";
 
 export interface JudgeControls {
   cache?: StageCache;
@@ -340,9 +341,10 @@ async function judgeOnce(
         durationMs: performance.now() - started,
       });
       if (kind !== "transient" || attempt === 3) break;
-      await Bun.sleep(
+      await abortableSleep(
         controls?.retryDelays?.[attempt - 1] ??
           retryDelay(error, attempt === 1 ? 10000 : 30000),
+        cancellationSignal(),
       );
       continue;
     }

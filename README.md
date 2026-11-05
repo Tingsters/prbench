@@ -26,6 +26,31 @@ Terra at medium, the same two judges in both presentation orders, and a 30-minut
 writer timeout. Each skill must include its matching platform binary in `bin/`.
 Comics and connected apps are disabled. Existing single-system commands remain available.
 
+#### Providers and parallel runs
+
+`--provider` picks who writes and who judges. A comparison never mixes the two
+families:
+
+| `--provider`      | Writers                                                                                     | Judges                           | Login                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------- |
+| `codex` (default) | `codex-native`, baseline and candidate Tracetoon on Sol and Terra                           | Sol and Terra                    | `prbench auth codex`                                                 |
+| `claude`          | `claude-native`, baseline and candidate Tracetoon on Claude Opus and Sonnet (effort medium) | Opus and Sonnet                  | `claude setup-token`, then pipe the token into `prbench auth claude` |
+| `both`            | two independent runs, in `<out>/codex` and `<out>/claude`                                   | each provider judges its own run | both                                                                 |
+
+A provider judging drafts from its own models is an accepted limitation; the two
+runs are reported separately, never pooled. A test-split run must use the
+provider of its development run (`--development` points at the same layout).
+
+`--parallel <n>` (default 4) runs up to n writers, judges and isolation probes
+at once per provider. Judges start as soon as the two drafts they compare exist,
+so finished cases report early. `--parallel 1` keeps the serial order. The
+frozen inputs, cache keys and reports do not depend on the setting. Concurrent
+Codex runs share the dedicated login file through a link instead of copying it,
+so refreshed tokens are never overwritten (verified with codex-cli 0.164 under
+concurrent forced refreshes); Windows keeps the exclusive copy mode. Claude runs
+use a long-lived setup token and need no coordination. After a failure no new
+job starts, running jobs finish and are saved, and `--resume` continues.
+
 The command freezes skill/runtime bytes and case inputs, records harness and CLI
 identity, rotates system execution order, and serializes credential use. It
 compares candidate against baseline and native separately. `--prepare-only`

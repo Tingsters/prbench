@@ -22,6 +22,10 @@ export interface CompareOptions {
   development?: string;
   reuseFrom?: string;
   recoverLock?: boolean;
+  /** codex (default) or claude; `both` is expanded by the CLI into two runs. */
+  provider?: string;
+  /** Concurrent writer/judge jobs for this provider (default 4). */
+  parallel?: number;
 }
 export function assertResume(expected: unknown, actual: unknown): void {
   if (JSON.stringify(expected) !== JSON.stringify(actual))
