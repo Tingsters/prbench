@@ -15,6 +15,12 @@ prbench preflight --dataset real-cases@1.0.0
 
 No account is required to download. `datasets fetch` verifies the archive and every installed file, then installs into a version-specific cache under `~/.cache/prbench/datasets` (or `$XDG_CACHE_HOME/prbench/datasets`). A verified cache works offline. `--out cases-local` installs into an empty project-local directory instead; existing user data is never replaced. If an installed dataset fails integrity checks, move it aside and fetch it again.
 
+If `prbench` is not found after installation, add the directory printed by
+`bun pm bin --global` to PATH and reopen the terminal. If Bun reports a dependency
+loop while upgrading an older URL installation, run `bun remove --global prbench`
+once before installing the new release. Comparison and model execution additionally
+need the Codex CLI; downloading and preflight do not.
+
 For a frozen comparison, supply the baseline and candidate skills with their matching platform binaries:
 
 ```sh
@@ -32,7 +38,7 @@ The dev split contains pr5, pr8, pr9, pr11 and pr12. Test contains pr10 and vexa
 
 ## Reproducibility and boundaries
 
-The tracked registry pins exact version URLs, archive SHA-256, manifest SHA-256, archive length and split IDs. `dataset.json` hashes all other files. No mutable `latest` download is used. Download verification never executes setup, follows archive links or merges with an existing directory. Setup needs ordinary package-registry access and is recorded separately from writer validation.
+The tracked registry pins exact version URLs, archive SHA-256, manifest SHA-256, archive length and split IDs. `dataset.json` hashes all other files. No mutable `latest` download is used. Download verification never executes setup, follows archive links or merges with an existing directory. Setup needs ordinary package-registry access and is recorded separately from writer validation. Installed CLI packages record a null Git revision and bind their source bytes by hash; they do not require a Git checkout or borrow the revision of an enclosing project.
 
 Historical fact-authoring digests live in `fact-sources/digest.json`, wrapped with case revisions and a hash of the source packet. Provenance identifies their exact ranges and labels the new review as automated. Preflight checks identity and hashes. These artifacts are judge-side source records, not replay sessions, and are never copied into writer sandboxes or writer cache identities. They document the old extractor's observations, including limitations; they cannot attest exact-head tests or disprove newer evidence.
 

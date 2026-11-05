@@ -16,7 +16,8 @@
     "docs",
     "README.md",
     "LICENSE",
-    "bun.lock"
+    "bun.lock",
+    "tsconfig.json"
   ],
   "scripts": {
     "prbench": "bun run src/cli.ts",

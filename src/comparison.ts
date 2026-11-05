@@ -69,7 +69,7 @@ import { performanceEvidence } from "./validationWork.ts";
 import { exec, git } from "./util/exec.ts";
 import { redactEvidence } from "./agents/validation.ts";
 import { setCancellationSignal } from "./run/cancellation.ts";
-import { commandIdentity, ownerIdentity } from "./run/identity.ts";
+import { commandIdentity, ownerIdentity, harnessRevision } from "./run/identity.ts";
 import { systemOrder, COMPARISON_SYSTEMS } from "./run/schedule.ts";
 import { controllerLock } from "./run/controller.ts";
 import {
@@ -135,7 +135,7 @@ export interface ComparisonManifest {
   };
   performanceBlock: string;
   provenance: {
-    harnessRevision: string;
+    harnessRevision: string | null;
     harnessHash: string;
     bun: string;
     at: string;
@@ -859,7 +859,7 @@ export async function compareV2(opts: CompareOptions) {
       id: identity,
       identity,
       provenance: {
-        harnessRevision: git(["rev-parse", "HEAD"], harness),
+        harnessRevision: harnessRevision(harness),
         harnessHash: directoryDigest(join(harness, "src")),
         bun: Bun.version,
         at: new Date().toISOString(),
@@ -969,7 +969,7 @@ export async function compareV2(opts: CompareOptions) {
       id: identity,
       identity,
       provenance: {
-        harnessRevision: git(["rev-parse", "HEAD"], harness),
+        harnessRevision: harnessRevision(harness),
         harnessHash: directoryDigest(join(harness, "src")),
         harnessSnapshotHash: directoryDigest(harnessSnapshot),
         bun: Bun.version,
