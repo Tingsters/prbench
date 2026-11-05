@@ -7,7 +7,12 @@ export function hostAgentStateFindings(commands: Pick<CommandEvidence, 'id' | 'c
     // PowerShell execution records can split a path with adjacent quote
     // fragments. Keep relative and redirected-home prefixes attached before
     // tokenizing; otherwise /path looks like an absolute host path.
-    const normalized = command.command.replaceAll(String.fromCharCode(92), '/').replace(/\/+/g, '/')
+    // A backslash that escapes a leading dot (`'!'\.agents/**`, a glob that
+    // excludes the folder) is shell quoting, not a Windows root; converting it
+    // would invent the absolute path `/.agents`. Only an escape whose token
+    // continues without backslashes qualifies: Windows paths (`\.agents\skills`,
+    // `C:\Users\x\.codex`) keep their separators and stay observable.
+    const normalized = command.command.replace(/(^|[\s"'`;(),!=])\\+(?=\.[^\s"'`;(),\\]*(?:[\s"'`;(),]|$))/g, '$1').replaceAll(String.fromCharCode(92), '/').replace(/\/+/g, '/')
       .replace(/(\.|~|\$(?:env:)?(?:CODEX_HOME|CLAUDE_CONFIG_DIR|HOME|USERPROFILE))["']+(?=\/)/gi, '$1');
     for (let token of normalized.split(/[\s"'`;(),]+/)) {
       try { token = decodeURIComponent(token); } catch { /* Keep an undecodable path conservative. */ }
