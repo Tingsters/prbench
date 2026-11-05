@@ -101,10 +101,15 @@ function fileUri(path: string): string | undefined {
 export function rewritePaths(jsonl: string, pairs: [from: string, to: string][]): string {
   const esc = (s: string) => JSON.stringify(s).slice(1, -1);
   const map = new Map<string, string>();
+  // A Windows path replayed on a POSIX host keeps its tail's backslashes
+  // (C:\repo\src\a.ts -> /sandbox/repo\src\a.ts), which no POSIX tool reads
+  // as a path inside the checkout; those tails get POSIX separators too.
+  const posixTail = new Set<string>();
   for (const [from, to] of pairs) {
     const fromUri = fileUri(from), toUri = fileUri(to);
     if (fromUri && toUri) map.set(esc(fromUri), esc(toUri));
     map.set(esc(from), esc(to));
+    if (/^(?:[A-Za-z]:)?\\/.test(from) && to.startsWith('/')) posixTail.add(esc(from));
     const fwd = from.replace(/\\/g, '/');
     if (fwd !== from) map.set(esc(fwd), esc(to.replace(/\\/g, '/')));
     const msys = msysPath(from);
@@ -115,8 +120,11 @@ export function rewritePaths(jsonl: string, pairs: [from: string, to: string][])
   // Whole paths only: not preceded by a path character, and followed by a
   // separator, a quote or the end, so "/work" doesn't match ".github/workflows".
   const alt = keys.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const re = new RegExp(`(?<![\\w.\\-~/\\\\])(?:${alt})(?=[\\\\/"'\`\\s]|$)`, 'g');
-  return jsonl.replace(re, (m) => map.get(m)!);
+  // The tail is JSON-escaped backslash + name segments, stopping at quotes,
+  // whitespace and further escapes, so a command's other arguments are kept.
+  const re = new RegExp(`(?<![\\w.\\-~/\\\\])(${alt})((?:\\\\\\\\[^"\\\\\\s]+)*)(?=[\\\\/"'\`\\s]|$)`, 'g');
+  return jsonl.replace(re, (_m, key: string, tail: string) =>
+    map.get(key)! + (posixTail.has(key) ? tail.replaceAll('\\\\', '/') : tail));
 }
 
 /** Where a case's repository was recorded, falling back to the first session's cwd. */
@@ -258,7 +266,10 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
   // (C:\Users\ABCDEF~1), which agents and the rewritten logs would spell differently.
   const root = realpathSync.native(mkdtempSync(join(parent, `prbench-${c.id}-`)));
   const rec = recordedPath(c);
-  const repo = join(root, 'work', rec ? basename(rec.replace(/[\\/]+$/, '')) || 'repo' : 'repo');
+  // The recorded path's own syntax decides its last segment: a Windows path
+  // (C:\replay\tracetoon) replayed on Linux has no "/", and the host's
+  // basename would keep the backslashes as one directory name.
+  const repo = join(root, 'work', rec ? rec.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'repo' : 'repo');
   const remote = join(root, 'remote.git');
   const gitDir = join(root, 'git');
   const home = join(root, 'home');
