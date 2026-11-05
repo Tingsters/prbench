@@ -1,6 +1,6 @@
 {
   "name": "prbench",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Evaluate tools that write or change the pull requests AI coding agents produce.",
   "type": "module",
   "license": "Apache-2.0",
@@ -8,6 +8,16 @@
   "bin": {
     "prbench": "./src/cli.ts"
   },
+  "files": [
+    "src",
+    "datasets",
+    "scripts",
+    "cases/example-greet-default",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "bun.lock"
+  ],
   "scripts": {
     "prbench": "bun run src/cli.ts",
     "test": "bun test --timeout 30000",

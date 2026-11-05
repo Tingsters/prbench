@@ -16,7 +16,7 @@ import { writerCaseIdentity } from "./writerInputs.ts";
 export { writerCaseIdentity } from "./writerInputs.ts";
 
 export interface FactSource {
-  kind: "git" | "session" | "diff" | "commit";
+  kind: "git" | "session" | "diff" | "commit" | "historical-digest";
   path?: string;
   revision?: string;
   startLine: number;
@@ -28,6 +28,7 @@ export interface FactProvenance {
   factsSha256: string;
   reviewedBy: string;
   reviewedAt: string;
+  reviewKind?: "human" | "automated";
   entries: Record<string, { rationale: string; sources: FactSource[] }>;
 }
 function casePath(loaded: LoadedCase, name: string) {
@@ -181,6 +182,19 @@ export function preflightCase(
             "--format=fuller",
             source.revision,
           ]);
+        } else if (source.kind === "historical-digest" && source.path === "fact-sources/digest.json") {
+          // This is judge-side provenance, never a replay session or writer input.
+          // Legacy facts explicitly describe the historical extractor's observations.
+          content = readFileSync(casePath(loaded, source.path), "utf8");
+          const record = JSON.parse(content);
+          if (record.schema !== "prbench.historical-digest/v1" || record.case !== loaded.case.id ||
+              record.base !== loaded.case.repo.base || record.head !== loaded.case.repo.head ||
+              !/^[a-f0-9]{64}$/.test(record.sourceSha256) || !record.digest ||
+              !/^[a-f0-9]{7,40}(?:\^\d*|~\d+)?$/.test(record.digest.pr?.base ?? '') ||
+              !/^[a-f0-9]{7,40}$/.test(record.digest.pr?.head ?? '') ||
+              git(['rev-parse', '--verify', `${record.digest.pr.base}^{commit}`]).trim() !== record.base ||
+              git(['rev-parse', '--verify', `${record.digest.pr.head}^{commit}`]).trim() !== record.head)
+            throw new Error(`${loaded.case.id}: historical digest identity mismatch.`);
         } else if (source.kind === "diff")
           content = git([
             "diff",

@@ -1,5 +1,23 @@
 # prbench
 
+### Public case library
+
+The real replay cases are available as a versioned download, with redacted sessions,
+repository bundles, fact provenance and pinned setup dependencies. No original
+agent logs or checkout on the author's machine are needed.
+
+```sh
+bun install --global https://github.com/Tingsters/prbench/releases/download/v0.3.0/prbench-0.3.0.tgz
+prbench datasets list
+prbench datasets fetch real-cases@1.0.0
+prbench preflight --dataset real-cases@1.0.0
+```
+
+`compare` uses this pinned dataset and its preparation profile when `--cases` is
+omitted. Supply your built baseline/candidate skills and add `--prepare-only`
+for a smoke test with no model calls. See [download and run instructions](docs/datasets.md)
+and the [dataset card](datasets/DATASET_CARD.md) for splits, privacy, license and limits.
+
 ### Frozen comparisons
 
 `bun run prbench compare --baseline-skill <dir> --candidate-skill <dir> --cases <dir> --split dev --out results/<experiment>`
@@ -87,7 +105,7 @@ Needs [Bun](https://bun.sh) 1.3.14 or later and git.
 Install the released CLI globally with Bun:
 
 ```sh
-bun install --global https://github.com/Tingsters/prbench/releases/download/v0.2.0/prbench-0.2.0.tgz
+bun install --global https://github.com/Tingsters/prbench/releases/download/v0.3.0/prbench-0.3.0.tgz
 prbench --version
 prbench --help
 ```

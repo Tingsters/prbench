@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { preflightCase, writerCaseIdentity } from "../src/run/preflight.ts";
 import { loadCase } from "../src/schema/case.ts";
@@ -67,4 +67,20 @@ test("fact edits preserve writer identity but invalidate provenance and judging 
   const session = join(example.dir, loaded.case.sessions![0]!.file);
   writeFileSync(session, readFileSync(session, "utf8") + "\n");
   expect(writerCaseIdentity(loadCase(example.dir))).not.toBe(before);
+});
+
+test('historical digests bind case revisions and hashes without becoming writer inputs', () => {
+  const example = copyExample('historical-record'), loaded = loadCase(example.dir), c = loaded.case;
+  const file = 'fact-sources/digest.json'; mkdirSync(join(example.dir, 'fact-sources'));
+  const record = { schema: 'prbench.historical-digest/v1', case: c.id, base: c.repo.base, head: c.repo.head, sourceSha256: 'a'.repeat(64), digest: { pr: { base: c.repo.base, head: c.repo.head }, stats: {} } };
+  const content = JSON.stringify(record,null,2)+'\n'; writeFileSync(join(example.dir,file), content);
+  const facts = JSON.parse(readFileSync(join(example.dir,c.facts!), 'utf8'));
+  const ids = Object.entries({ C: facts.claims, X: facts.context, U: facts.uncertainties, T: facts.traps }).flatMap(([prefix,values]) => (values as string[]).map((_,i) => prefix+(i+1)));
+  const provenance = { schema:'prbench.fact-provenance/v1', factsSha256:digest(readFileSync(join(example.dir,c.facts!))), reviewedBy:'automated test fixture', reviewKind:'automated', reviewedAt:'2026-11-05T00:00:00Z', entries:Object.fromEntries(ids.map(id=>[id,{rationale:'Synthetic historical fixture',sources:[{kind:'historical-digest',path:file,startLine:1,endLine:content.split('\n').length,sha256:digest(content)}]}])) };
+  writeFileSync(join(example.dir,'facts-provenance.json'), JSON.stringify(provenance));
+  const identity = writerCaseIdentity(loaded);
+  expect(preflightCase(loaded,{cache:tempDir(),requireProvenance:true}).checkedFacts).toBe(ids.length);
+  record.case = 'wrong-case'; writeFileSync(join(example.dir,file),JSON.stringify(record));
+  expect(writerCaseIdentity(loaded)).toBe(identity);
+  expect(()=>preflightCase(loaded,{cache:tempDir(),requireProvenance:true})).toThrow('identity mismatch');
 });

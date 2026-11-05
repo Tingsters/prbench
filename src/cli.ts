@@ -28,6 +28,7 @@ import { experimentStatus } from "./run/status.ts";
 import { preflight } from "./run/preflight.ts";
 import { calibrateScope } from "./calibration.ts";
 import { admission } from "./admission.ts";
+import { datasetReleases, datasetRelease, defaultDataset, installDataset, resolveDatasetInputs } from "./datasets.ts";
 
 const program = new Command("prbench")
   .version(version)
@@ -54,6 +55,18 @@ const list = (s: string) =>
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
+
+const datasets = program.command("datasets").description("List and download versioned public case libraries without model calls");
+datasets.command("list").action(() => {
+  for (const d of datasetReleases) console.log(`${d.id}@${d.version}  dev=${d.cases.dev.length} test=${d.cases.test.length}  ${d.description}`);
+});
+datasets.command("fetch")
+  .argument("[dataset]", "pinned dataset id@version", defaultDataset)
+  .option("--out <dir>", "install into a new directory instead of the shared cache")
+  .action(async (spec: string, opts: { out?: string }) => {
+    const path = opts.out ? await installDataset(datasetRelease(spec), opts.out) : (await resolveDatasetInputs({ dataset: spec })).cases;
+    console.log(`Dataset verified: ${spec}\nCases: ${path}\nPreparation: ${join(path, 'preparation.json')}`);
+  });
 
 program
   .command("calibrate-scope")
@@ -117,7 +130,8 @@ program
     "--candidate-skill <dir>",
     "candidate skill with matching platform binary",
   )
-  .requiredOption("--cases <dir>", "case directory")
+  .option("--cases <dir>", "local case directory")
+  .option("--dataset <id@version>", "public dataset; defaults to the pinned release when --cases is omitted")
   .requiredOption("--out <dir>", "new experiment directory")
   .option("--split <split>", "dev or test", "dev")
   .option("--preparation <file>", "explicit per-case preparation profile")
@@ -156,9 +170,10 @@ program
     "rebuild a v2 report with no model calls; requires --resume",
   )
   .option("--timeout-ms <ms>", "explicit per-process hung-job timeout", Number)
-  .action(async (opts: CompareOptions) => {
+  .action(async (opts: Omit<CompareOptions, 'cases'> & { cases?: string; dataset?: string }) => {
     try {
-      const result = await compare(opts);
+      const inputs = await resolveDatasetInputs(opts);
+      const result = await compare({ ...opts, ...inputs });
       if ("exitCode" in result) process.exitCode = result.exitCode;
     } catch (error) {
       console.error(String(error));
@@ -188,32 +203,29 @@ program
   );
 program
   .command("preflight")
-  .requiredOption("--cases <dir>", "case directory")
+  .option("--cases <dir>", "local case directory")
+  .option("--dataset <id@version>", "public dataset; defaults to the pinned release")
   .option("--split <split>", "selected split", "dev")
   .option("--out <file>", "save evidence preview")
-  .action((opts: { cases: string; split: string; out?: string }) => {
+  .action(async (opts: { cases?: string; dataset?: string; split: string; out?: string }) => {
     if (!["dev", "test"].includes(opts.split))
       throw new Error("Split must be dev or test.");
     if (opts.split === "test")
       throw new Error(
         "Held-out preflight runs only through compare after the development gate passes.",
       );
-    const selected = caseDirs(resolve(opts.cases))
+    const inputs = await resolveDatasetInputs(opts);
+    const selected = caseDirs(resolve(inputs.cases))
       .map(loadCase)
       .filter((l) => l.case.split === opts.split && !l.case.excluded);
-    console.log(
-      JSON.stringify(
-        preflight(selected, {
+    const result = preflight(selected, {
           cache: resolve(
             import.meta.dir,
             "../node_modules/.cache/prbench-preflight",
           ),
           out: opts.out,
-        }),
-        null,
-        2,
-      ),
-    );
+        });
+    console.log(JSON.stringify({ ...result, cases: result.cases.map(({ neutralEvidence: _privateEvidence, ...summary }) => summary) }, null, 2));
   });
 
 program
