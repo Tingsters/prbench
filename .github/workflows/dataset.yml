@@ -26,7 +26,7 @@ jobs:
         run: |
           mkdir -p results/package
           bun pm pack --filename results/package/prbench.tgz
-          bun install --global ./results/package/prbench.tgz
+          bun install --global "$GITHUB_WORKSPACE/results/package/prbench.tgz"
           bun pm bin --global >> "$GITHUB_PATH"
       - name: Download and verify without authentication or models
         env:
