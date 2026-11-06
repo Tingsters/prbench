@@ -23,6 +23,7 @@ import {
   verifyComparisonIsolation,
 } from "../src/run/isolation.ts";
 import { runCase } from "../src/run/runner.ts";
+import { comparisonProvider } from "../src/run/provider.ts";
 import { createSandbox } from "../src/run/sandbox.ts";
 import { loadCase } from "../src/schema/case.ts";
 import { PR_PROMPT } from "../src/systems/agentShared.ts";
@@ -476,6 +477,41 @@ describe("claude auth and environment", () => {
         { CLAUDE_CODE_OAUTH_TOKEN: "t" },
       ),
     ).toEqual({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "t" });
+  });
+
+  test("shell bookkeeping neither reaches writers nor changes the environment identity", () => {
+    const before = comparisonProvider("claude").environmentHash();
+    setEnv({
+      CLAUDE_PID: "4242",
+      CLAUDE_EFFORT: "max",
+      INVOCATION_ID: "abc",
+      SHLVL: "9",
+    });
+    try {
+      expect(comparisonProvider("claude").environmentHash()).toBe(before);
+      const sandbox = createSandbox(loadCase(EXAMPLE), { parent: tempDir() });
+      try {
+        for (const k of [
+          "CLAUDE_PID",
+          "CLAUDE_EFFORT",
+          "INVOCATION_ID",
+          "SHLVL",
+        ])
+          expect(sandbox.env[k]).toBeUndefined();
+      } finally {
+        sandbox.dispose();
+      }
+      setEnv({ SOME_TOOL_SETTING: "on" });
+      expect(comparisonProvider("claude").environmentHash()).not.toBe(before);
+    } finally {
+      setEnv({
+        CLAUDE_PID: saved.CLAUDE_PID,
+        CLAUDE_EFFORT: saved.CLAUDE_EFFORT,
+        INVOCATION_ID: saved.INVOCATION_ID,
+        SHLVL: saved.SHLVL,
+        SOME_TOOL_SETTING: undefined,
+      });
+    }
   });
 
   test("status names the source, never the token, and saved tokens are owner-only", () => {

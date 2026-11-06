@@ -207,6 +207,19 @@ function writeGhShims(bin: string): void {
   }
 }
 
+/**
+ * Per-login and per-process bookkeeping that differs between shells and says
+ * nothing about the writer's environment. Writers never see it, so a resumed
+ * experiment from another shell keeps its environment identity.
+ */
+export const VOLATILE_ENV = [
+  'INVOCATION_ID', 'JOURNAL_STREAM', 'SYSTEMD_EXEC_PID', 'MANAGERPID', 'MANAGERPIDFDID',
+  'MEMORY_PRESSURE_WATCH', 'MEMORY_PRESSURE_WRITE', 'WINDOWID', 'SHELL_SESSION_ID',
+  'XDG_SESSION_ID', 'XDG_VTNR', 'DBUS_SESSION_BUS_ADDRESS', 'SESSION_MANAGER',
+  'SSH_AUTH_SOCK', 'GPG_TTY', 'OLDPWD', 'SHLVL', '_',
+];
+export const VOLATILE_PREFIXES = ['KONSOLE_', 'CLAUDE_'];
+
 const DROPPED_ENV = [
   'GH_TOKEN',
   'GITHUB_TOKEN',
@@ -224,7 +237,9 @@ const DROPPED_ENV = [
   'CLAUDECODE',
   'PRBENCH_CLAUDE_OAUTH_TOKEN',
 ];
-const DROPPED_PREFIXES = ['CODEX_', 'ANTHROPIC_', 'CLAUDE_CODE_'];
+// CLAUDE_ covers the host session's CLAUDE_CODE_*, CLAUDE_PID and CLAUDE_EFFORT,
+// which would otherwise reach a writer's Claude Code.
+const DROPPED_PREFIXES = ['CODEX_', 'ANTHROPIC_', ...VOLATILE_PREFIXES];
 
 function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: string }, c: Case): Record<string, string> {
   const env: Record<string, string> = {};
@@ -232,7 +247,7 @@ function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: st
   // Windows env names are case-insensitive; drop every spelling of PATH first.
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
   const path = env[pathKey] ?? '';
-  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || DROPPED_PREFIXES.some((p) => k.toUpperCase().startsWith(p)) || DROPPED_ENV.includes(k.toUpperCase())) delete env[k];
+  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || DROPPED_PREFIXES.some((p) => k.toUpperCase().startsWith(p)) || DROPPED_ENV.includes(k.toUpperCase()) || VOLATILE_ENV.includes(k.toUpperCase())) delete env[k];
   const appdata = join(sb.root, 'appdata');
   for (const d of ['roaming', 'local', 'config', 'data', 'state', 'cache']) mkdirSync(join(appdata, d), { recursive: true });
   Object.assign(env, {

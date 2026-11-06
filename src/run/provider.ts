@@ -5,6 +5,7 @@
  * make a judge's preference for its own family indistinguishable from quality.
  */
 import { stageKey } from "./cache.ts";
+import { VOLATILE_ENV, VOLATILE_PREFIXES } from "./sandbox.ts";
 import { digest } from "../util/hash.ts";
 import {
   codexAuthHome,
@@ -78,6 +79,9 @@ function claudeComparableEnv(): Record<string, string | undefined> {
         !HOME_KEYS.includes(k) &&
         !k.startsWith("ANTHROPIC_") &&
         !k.startsWith("CLAUDE_CODE_") &&
+        // Never passed to writers (sandbox.ts drops them): shell and session bookkeeping.
+        !VOLATILE_ENV.includes(k) &&
+        !VOLATILE_PREFIXES.some((p) => k.startsWith(p)) &&
         !k.startsWith("CODEX_") &&
         !k.startsWith("FAKE_") &&
         !k.startsWith("PRBENCH_CLAUDE_") &&
