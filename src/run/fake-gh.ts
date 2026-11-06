@@ -32,7 +32,7 @@ function created(): unknown[] {
     .split('\n')
     .filter(Boolean)
     .map((l) => JSON.parse(l))
-    .filter((e) => e.args[0] === 'pr' && e.args[1] === 'create' && e.ok);
+    .filter((e) => e.args[0] === 'pr' && e.args[1] === 'create' && e.ok && !e.help);
 }
 
 function record(entry: Record<string, unknown>): void {
@@ -46,6 +46,9 @@ function done(stdout: string, entry: Record<string, unknown> = {}): never {
 }
 
 const [a, b] = args;
+// Help never acts, as with the real gh: `gh pr create --help` must not open a PR.
+if (args.includes('--help') || args.includes('-h') || a === 'help')
+  done(`gh ${args.filter((x) => !x.startsWith('-')).join(' ')}: help (prbench fake)\n`, { help: true });
 if (a === '--version') done('gh version 2.99.0 (prbench fake)\n');
 if (a === 'auth' && b === 'status') done('Logged in to github.com as prbench (fake)\n');
 if (a === 'api' && b === 'user') done(args.includes('--jq') ? 'prbench\n' : '{"login":"prbench"}\n');

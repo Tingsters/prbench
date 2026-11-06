@@ -229,6 +229,15 @@ describe('createSandbox', () => {
       expect(second.stdout.trim()).toEndWith('/pull/2');
       expect(sb.capturedPRs()[1]).toMatchObject({ number: 2, title: 'Again', body: 'inline', draft: false });
 
+      // Help never opens a PR (seen from a Codex writer: `gh pr create --help`).
+      for (const help of [['pr', 'create', '--help'], ['pr', 'view', '-h'], ['help', 'pr']]) {
+        const h = gh(help, sb.env, sb.repo);
+        expect(h.code).toBe(0);
+        expect(h.stdout).not.toContain('/pull/');
+      }
+      expect(sb.capturedPRs()).toHaveLength(2);
+      expect(gh(['pr', 'create', '--title', 'Third'], sb.env, sb.repo).stdout.trim()).toEndWith('/pull/3');
+
       const odd = gh(['release', 'create', 'v1'], sb.env, sb.repo);
       expect(odd.code).toBe(1);
       expect(odd.stderr).toContain('unsupported command');
