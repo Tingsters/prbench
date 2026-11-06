@@ -26,6 +26,8 @@ export interface CompareOptions {
   provider?: string;
   /** Concurrent writer/judge jobs for this provider (default 4). */
   parallel?: number;
+  /** Writer models, replacing the provider's defaults; the judges stay the same. */
+  models?: string[];
 }
 export function assertResume(expected: unknown, actual: unknown): void {
   if (JSON.stringify(expected) !== JSON.stringify(actual))

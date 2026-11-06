@@ -207,6 +207,15 @@ program
     Number,
     4,
   )
+  .option(
+    "--models <ids>",
+    "writer models (comma-separated), replacing the provider's defaults; the provider's judges stay the same",
+    (v: string) =>
+      v
+        .split(",")
+        .map((m) => m.trim())
+        .filter(Boolean),
+  )
   .action(
     async (
       opts: Omit<CompareOptions, "cases"> & {
@@ -214,6 +223,13 @@ program
         dataset?: string;
       },
     ) => {
+      if (opts.provider === "both" && opts.models?.length) {
+        console.error(
+          "--models names one provider's models; run --provider codex and --provider claude separately.",
+        );
+        process.exitCode = 2;
+        return;
+      }
       if (opts.provider === "both") {
         process.exitCode = await runBothProviders(process.argv.slice(2));
         return;

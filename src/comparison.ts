@@ -668,13 +668,18 @@ export async function compareV2(opts: CompareOptions) {
   if (!["dev", "test"].includes(opts.split))
     throw new Error("Comparison split must be dev or test.");
   const provider = comparisonProvider(opts.provider),
-    MODELS = provider.models,
+    MODELS = opts.models?.length ? opts.models : provider.models,
     JUDGES = provider.judges,
     SYSTEMS = provider.systems;
   if (old && manifestProvider(old.settings).id !== provider.id)
     throw new Error(
       `This experiment was frozen for ${manifestProvider(old.settings).label}; resume it with --provider ${manifestProvider(old.settings).id}.`,
     );
+  if (
+    new Set(MODELS).size !== MODELS.length ||
+    MODELS.some((m) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(m))
+  )
+    throw new Error("--models must be distinct model ids.");
   const parallel = Number(opts.parallel ?? 4);
   if (!Number.isSafeInteger(parallel) || parallel < 1)
     throw new Error("--parallel must be a positive integer.");

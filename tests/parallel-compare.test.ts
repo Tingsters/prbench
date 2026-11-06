@@ -299,6 +299,50 @@ test("claude comparison runs end to end with Claude writers and Claude judges on
   ).toBe("");
 }, 600_000);
 
+test("--models replaces the writer models and keeps the provider's judges", async () => {
+  const cases = copyExample("claude-smoke");
+  const log = join(tempDir(), "claude.jsonl");
+  const opts: CompareOptions = {
+    ...skills(),
+    cases: cases.root,
+    split: "dev",
+    purpose: "diagnostic",
+    replicates: 1,
+    out: join(tempDir(), "claude-models"),
+    provider: "claude",
+    parallel: 3,
+    models: ["claude-haiku-5-5"],
+  };
+  await withEnv(claudeEnv(log), () => compare(opts));
+  const manifest = JSON.parse(
+    readFileSync(join(opts.out, "manifest.json"), "utf8"),
+  );
+  expect(manifest.settings.models).toEqual(["claude-haiku-5-5"]);
+  expect(manifest.settings.judges).toEqual([
+    "claude:claude-opus-5-5@medium",
+    "claude:claude-sonnet-5-5@medium",
+  ]);
+  const summary = JSON.parse(
+    readFileSync(join(opts.out, "summary.json"), "utf8"),
+  );
+  expect(summary.coverage.complete).toBe(true);
+  expect(new Set(summary.writerMetrics.map((m: any) => m.model))).toEqual(
+    new Set(["claude-haiku-5-5"]),
+  );
+  // The writer CLI received the chosen model.
+  const writerModels = readFileSync(log, "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l).args ?? [])
+    .filter((a: string[]) => !a.includes("--json-schema"))
+    .map((a: string[]) => a[a.indexOf("--model") + 1])
+    .filter(Boolean);
+  expect(writerModels).toContain("claude-haiku-5-5");
+  await expect(
+    compare({ ...opts, out: join(tempDir(), "dup"), models: ["a", "a"] }),
+  ).rejects.toThrow(/distinct/);
+}, 600_000);
+
 test("--provider both runs two independent comparisons", async () => {
   const cases = copyExample("both-smoke");
   const auth = tempDir();
@@ -358,7 +402,12 @@ test("the Claude environment identity ignores where the command was launched fro
   const { comparisonProvider } = await import("../src/run/provider.ts");
   const hash = (cwd: string) =>
     withEnv(
-      { PWD: cwd, OLDPWD: cwd, INIT_CWD: cwd, npm_package_json: `${cwd}/package.json` },
+      {
+        PWD: cwd,
+        OLDPWD: cwd,
+        INIT_CWD: cwd,
+        npm_package_json: `${cwd}/package.json`,
+      },
       async () => comparisonProvider("claude").environmentHash(),
     );
   expect(await hash("/one")).toBe(await hash("/two"));
