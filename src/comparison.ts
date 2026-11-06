@@ -1393,7 +1393,7 @@ export async function compareV2(opts: CompareOptions) {
       const judgeProvider = parseJudge(judge),
         observed = {
           ...judgeProvider,
-          ask: async (prompt: string) => {
+          ask: async (prompt: string, schema?: object) => {
             assertResume(
               judgeContract,
               implementationDigest(harness, judgeEntries),
@@ -1405,7 +1405,7 @@ export async function compareV2(opts: CompareOptions) {
             newJudgeCalls++;
             console.log(`call ${label}`);
             update();
-            const reply = await judgeProvider.ask(prompt);
+            const reply = await judgeProvider.ask(prompt, schema);
             assertResume(
               judgeContract,
               implementationDigest(harness, judgeEntries),

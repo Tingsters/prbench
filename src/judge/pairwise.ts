@@ -18,6 +18,7 @@ import { extractJson, type JudgeProvider } from "./providers.ts";
 import {
   buildPrompt,
   checkJudgment,
+  judgmentSchema,
   RUBRIC_VERSION,
   type Judgment,
   type SideJudgment,
@@ -302,7 +303,7 @@ async function judgeOnce(
     const started = performance.now();
     let reply;
     try {
-      reply = await judge.ask(request);
+      reply = await judge.ask(request, judgmentSchema(refs));
     } catch (error) {
       lastError = redactEvidence(String(error));
       // Some CLI providers signal an empty structured reply as an exception.

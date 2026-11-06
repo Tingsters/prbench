@@ -141,6 +141,52 @@ export const JUDGMENT_SCHEMA = {
   },
 };
 
+/**
+ * The judgment schema for one prompt. Reference fields become enums of exactly
+ * the IDs that side may cite, so a structured-output judge cannot invent a fact
+ * ID or cite the other draft's evidence; checkJudgment still validates
+ * everything the schema cannot express (claim/assessment consistency).
+ */
+export function judgmentSchema(refs?: { A: Set<string>; B: Set<string> }) {
+  if (!refs) return JUDGMENT_SCHEMA;
+  const only = (ids: string[]) =>
+    ids.length
+      ? { type: "array", items: { type: "string", enum: [...ids].sort() } }
+      : strings;
+  const sideFor = (available: Set<string>) => {
+    const all = [...available],
+      prefixed = (p: string) => all.filter((id) => id.startsWith(p));
+    return {
+      ...side,
+      properties: {
+        ...side.properties,
+        claimAssessments: {
+          ...side.properties.claimAssessments,
+          items: {
+            ...side.properties.claimAssessments.items,
+            properties: {
+              ...side.properties.claimAssessments.items.properties,
+              evidenceRefs: only(all),
+            },
+          },
+        },
+        claimsCovered: only(prefixed("C")),
+        contextCovered: only(prefixed("X")),
+        uncertaintiesRespected: only(prefixed("U")),
+        trapsHit: only(prefixed("T")),
+      },
+    };
+  };
+  return {
+    ...JUDGMENT_SCHEMA,
+    properties: {
+      ...JUDGMENT_SCHEMA.properties,
+      A: sideFor(refs.A),
+      B: sideFor(refs.B),
+    },
+  };
+}
+
 export interface PromptInput {
   /** Exact clauses selected for assessment; never expected statuses or rationales. */
   assessmentTargets?: Partial<Record<"A" | "B", string[]>>;

@@ -20,7 +20,8 @@ export interface JudgeProvider {
   /** Stable id used in file names and reports, e.g. "claude:opus". */
   id: string;
   family: string;
-  ask(prompt: string): Promise<JudgeReply>;
+  /** `schema` narrows the reply shape for this prompt (default: JUDGMENT_SCHEMA). */
+  ask(prompt: string, schema?: object): Promise<JudgeReply>;
 }
 
 function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -56,7 +57,7 @@ export function claudeJudge(model = 'opus', timeoutMs = 15 * 60_000, effort?: Cl
   return {
     id: `claude:${model}${effort ? `@${effort}` : ''}`,
     family: 'anthropic',
-    ask: (prompt) =>
+    ask: (prompt, schema) =>
       withTempDir(async (dir) => {
         const cmd = [...claudeCommand(), '-p'];
         let env: Record<string, string | undefined> | undefined;
@@ -88,7 +89,7 @@ export function claudeJudge(model = 'opus', timeoutMs = 15 * 60_000, effort?: Cl
           );
           cmd.push('--model', model, '--effort', effort, ...claudeJudgeFlags());
         } else cmd.push('--tools', '', '--model', model, '--no-session-persistence', '--settings', '{"disableAllHooks":true}');
-        cmd.push('--output-format', 'json', '--json-schema', JSON.stringify(JUDGMENT_SCHEMA));
+        cmd.push('--output-format', 'json', '--json-schema', JSON.stringify(schema ?? JUDGMENT_SCHEMA));
         const r = await runAgentProcess(cmd, { prompt, cwd, timeoutMs, env, terminalEvent: effort ? claudeTerminalEvent : undefined });
         if (r.timedOut) throw new Error(`claude judge timed out after ${timeoutMs} ms`);
         if (r.exitCode !== 0) throw new Error(`claude judge failed (${r.exitCode}): ${(r.stderr || r.stdout).slice(-800)}`);
@@ -104,12 +105,12 @@ export function codexJudge(model?: string, timeoutMs = 15 * 60_000, effort?: Rea
   return {
     id: `codex:${model ?? 'default'}${effort ? `@${effort}` : ''}`,
     family: 'openai',
-    ask: (prompt) =>
+    ask: (prompt, schema) =>
       withTempDir(async (dir) => {
-        const schema = join(dir, 'schema.json');
+        const schemaFile = join(dir, 'schema.json');
         const out = join(dir, 'out.json');
-        writeFileSync(schema, JSON.stringify(JUDGMENT_SCHEMA));
-        const cmd = [...codexCommand(), 'exec', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '--output-schema', schema, '-o', out];
+        writeFileSync(schemaFile, JSON.stringify(schema ?? JUDGMENT_SCHEMA));
+        const cmd = [...codexCommand(), 'exec', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '--output-schema', schemaFile, '-o', out];
         if (model) cmd.push('-m', model);
         if (effort) cmd.push('--json', '--ignore-user-config', '--disable', 'hooks', '--disable', 'memories', '--disable', 'multi_agent', '--disable', 'apps', '-c', 'apps._default.enabled=false', '--disable', 'browser_use', '--disable', 'computer_use', '--disable', 'shell_tool', '--disable', 'view_image', '--disable', 'plugins', '--disable', 'image_generation', '-c', `model_reasoning_effort="${effort}"`, '-c', 'cli_auth_credentials_store="file"', '-c', 'web_search="disabled"');
         cmd.push('-');
