@@ -82,7 +82,11 @@ function claudeComparableEnv(): Record<string, string | undefined> {
         !k.startsWith("FAKE_") &&
         !k.startsWith("PRBENCH_CLAUDE_") &&
         !k.startsWith("PRBENCH_CODEX_") &&
-        !["CLAUDECODE", "OPENAI_API_KEY"].includes(k)
+        !["CLAUDECODE", "OPENAI_API_KEY"].includes(k) &&
+        // Shell and launcher bookkeeping: where the command was typed from,
+        // not anything a writer sees (each runs in its own sandbox cwd).
+        !["PWD", "OLDPWD", "INIT_CWD", "SHLVL", "_"].includes(k) &&
+        !k.startsWith("NPM_")
       );
     }),
   );

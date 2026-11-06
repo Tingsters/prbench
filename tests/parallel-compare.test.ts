@@ -353,3 +353,13 @@ test("--provider both runs two independent comparisons", async () => {
     expect(judges.every((j) => j.startsWith(`${provider}:`))).toBe(true);
   }
 }, 900_000);
+
+test("the Claude environment identity ignores where the command was launched from", async () => {
+  const { comparisonProvider } = await import("../src/run/provider.ts");
+  const hash = (cwd: string) =>
+    withEnv(
+      { PWD: cwd, OLDPWD: cwd, INIT_CWD: cwd, npm_package_json: `${cwd}/package.json` },
+      async () => comparisonProvider("claude").environmentHash(),
+    );
+  expect(await hash("/one")).toBe(await hash("/two"));
+});
