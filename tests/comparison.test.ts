@@ -13,7 +13,7 @@ import { artifactDigest } from "../src/schema/artifact.ts";
 import { cleanupTemps, copyExample, tempDir } from "./helpers.ts";
 afterAll(cleanupTemps);
 
-test("frozen comparison runs three systems, both orders, and resumes only matching artifacts", async () => {
+async function fakeComparisonSetup() {
   const cases = copyExample("comparison-smoke");
   const skill = tempDir(),
     bin = join(skill, "bin");
@@ -73,6 +73,16 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
     Object.keys(vars).map((k) => [k, process.env[k]]),
   );
   Object.assign(process.env, vars);
+  const restore = () => {
+    for (const [k, v] of Object.entries(saved))
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+  };
+  return { cases, skill, candidate, log, restore };
+}
+
+test("frozen comparison runs three systems, both orders, and resumes only matching artifacts", async () => {
+  const { cases, skill, candidate, log, restore } = await fakeComparisonSetup();
   const opts = {
     baselineSkill: skill,
     candidateSkill: candidate,
@@ -244,8 +254,110 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
       "inputs changed",
     );
   } finally {
-    for (const [k, v] of Object.entries(saved))
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
+    restore();
+  }
+}, 240_000);
+
+test("--systems baseline,candidate plans no native writers and only candidate-vs-baseline judgments", async () => {
+  const { cases, skill, candidate, restore } = await fakeComparisonSetup();
+  try {
+    for (const id of ["two", "three", "four", "five"])
+      cpSync(cases.dir, join(cases.root, id), { recursive: true });
+    for (const id of ["two", "three", "four", "five"]) {
+      const file = join(cases.root, id, "case.json"),
+        c = JSON.parse(readFileSync(file, "utf8"));
+      c.id = id;
+      writeFileSync(file, JSON.stringify(c, null, 2));
+    }
+    const base = {
+      baselineSkill: skill,
+      candidateSkill: candidate,
+      cases: cases.root,
+      split: "dev",
+      out: join(tempDir(), "plan"),
+      purpose: "diagnostic",
+      replicates: 3,
+      plan: true,
+    };
+    const all: any = await compare(base);
+    expect(all.writers).toBe(5 * 2 * 3 * 3);
+    expect(all.orders).toBe(5 * 2 * 2 * 2 * 2 * 3);
+    expect(all.judgedAgainst).toEqual(["tracetoon-baseline", "codex-native"]);
+    const plan: any = await compare({
+      ...base,
+      systems: ["baseline", "tracetoon-candidate"],
+    });
+    // 2 models × 5 cases × 3 replicates × 2 systems; one pairing × 2 judges × 2 orders.
+    expect(plan.writers).toBe(60);
+    expect(plan.orders).toBe(120);
+    expect(plan.systems).toEqual(["tracetoon-baseline", "tracetoon-candidate"]);
+    expect(plan.judgedAgainst).toEqual(["tracetoon-baseline"]);
+    expect(plan.jobs).toHaveLength(60);
+    expect(plan.jobs.some((j: any) => j.system === "codex-native")).toBe(false);
+    // The native name and full names are accepted; candidate and baseline are required.
+    expect(
+      ((await compare({ ...base, systems: ["codex-native", "baseline", "candidate"] })) as any).writers,
+    ).toBe(90);
+    await expect(compare({ ...base, systems: ["native", "candidate"] })).rejects.toThrow("baseline and candidate");
+    await expect(compare({ ...base, systems: ["baseline", "native"] })).rejects.toThrow("baseline and candidate");
+    await expect(compare({ ...base, systems: ["baseline", "candidate", "gpt"] })).rejects.toThrow("Unknown system");
+  } finally {
+    restore();
+  }
+}, 240_000);
+
+test("a run without native completes, scores, and records its systems for resume", async () => {
+  const { cases, skill, candidate, log, restore } = await fakeComparisonSetup();
+  const opts = {
+    baselineSkill: skill,
+    candidateSkill: candidate,
+    cases: cases.root,
+    split: "dev",
+    out: join(tempDir(), "experiment"),
+    purpose: "diagnostic",
+    replicates: 1,
+    systems: ["baseline", "candidate"],
+  };
+  try {
+    await compare(opts);
+    const summary = JSON.parse(readFileSync(join(opts.out, "summary.json"), "utf8"));
+    expect(summary.writerMetrics.map((m: any) => m.system).sort()).toEqual([
+      "tracetoon-baseline",
+      "tracetoon-baseline",
+      "tracetoon-candidate",
+      "tracetoon-candidate",
+    ]);
+    expect(summary.coverage).toMatchObject({
+      writers: 4,
+      expectedWriters: 4,
+      orders: 8,
+      expectedOrders: 8,
+      complete: true,
+    });
+    expect(summary.reports.map((r: any) => r.comparison)).toEqual([
+      "tracetoon-baseline",
+      "tracetoon-baseline",
+    ]);
+    expect(summary.qualityGate.failures.join("\n")).not.toContain("native");
+    expect(summary.scores.length).toBe(4);
+    expect(summary.scores.some((d: any) => d.system === "codex-native")).toBe(false);
+    const md = readFileSync(join(opts.out, "summary.md"), "utf8");
+    expect(md).toContain("| gpt-6.1-sol | tracetoon-baseline | 1 | 0.0 [–, –] | 0.00 |");
+    expect(md.split("Paired candidate − other system")[1]!.split("\n\n")[1]).not.toContain("native");
+    expect(md).toContain("Composite Δ [95% CI]");
+    const manifest = JSON.parse(readFileSync(join(opts.out, "manifest.json"), "utf8"));
+    expect(manifest.settings.systems).toEqual(["tracetoon-baseline", "tracetoon-candidate"]);
+    const isolation = JSON.parse(readFileSync(join(opts.out, "isolation.json"), "utf8"));
+    expect(isolation.probes.length).toBe(4);
+    // Resume keeps the frozen systems; asking for different ones is a new experiment.
+    const before = readFileSync(log, "utf8");
+    await compare({ ...opts, systems: undefined, resume: true });
+    await compare({ ...opts, resume: true, reportOnly: true });
+    expect(readFileSync(log, "utf8")).toBe(before);
+    await expect(compare({ ...opts, resume: true, systems: ["native", "baseline", "candidate"] })).rejects.toThrow(
+      "inputs changed",
+    );
+  } finally {
+    restore();
   }
 }, 240_000);

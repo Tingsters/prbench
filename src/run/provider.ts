@@ -132,3 +132,64 @@ export function skillInput(
   if (system === "tracetoon-candidate") return "candidate";
   return undefined;
 }
+
+const SYSTEM_ALIASES: Record<string, "native" | "baseline" | "candidate"> = {
+  native: "native",
+  baseline: "baseline",
+  "tracetoon-baseline": "baseline",
+  candidate: "candidate",
+  "tracetoon-candidate": "candidate",
+};
+
+/**
+ * Writer systems for one run, in the provider's canonical order. Accepts
+ * `native`, `baseline`, `candidate`, the full Tracetoon names and the
+ * provider's native name. Omitted means all three. Candidate and baseline are
+ * always required: the baseline pairing is the primary comparison.
+ */
+export function selectSystems(
+  provider: ComparisonProvider,
+  names?: string[],
+): string[] {
+  if (!names?.length) return [...provider.systems];
+  const wanted = new Set<string>();
+  for (const raw of names) {
+    const name = raw.trim();
+    const role =
+      name === provider.native ? "native" : SYSTEM_ALIASES[name];
+    if (!role)
+      throw new Error(
+        `Unknown system ${name}; use native, baseline or candidate (or ${provider.systems.join(", ")}).`,
+      );
+    wanted.add(
+      role === "native"
+        ? provider.native
+        : role === "baseline"
+          ? "tracetoon-baseline"
+          : "tracetoon-candidate",
+    );
+  }
+  if (!wanted.has("tracetoon-candidate") || !wanted.has("tracetoon-baseline"))
+    throw new Error(
+      "--systems needs at least baseline and candidate (native is optional).",
+    );
+  return provider.systems.filter((s) => wanted.has(s));
+}
+
+/** Manifests without `systems` ran all of the provider's systems. */
+export function manifestSystems(
+  settings: { systems?: string[] },
+  provider: ComparisonProvider,
+): string[] {
+  return settings.systems ?? [...provider.systems];
+}
+
+/** Systems the candidate is judged against, in report order. */
+export function judgedAgainst(
+  systems: string[],
+  provider: ComparisonProvider,
+): string[] {
+  return ["tracetoon-baseline", provider.native].filter((s) =>
+    systems.includes(s),
+  );
+}

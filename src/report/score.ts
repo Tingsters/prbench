@@ -416,20 +416,21 @@ export function accuracyMarkdown(drafts: DraftScore[], candidate = "tracetoon-ca
   if (cands.length && bases.length) {
     lines.push(
       "",
-      `Candidate arms against baseline arms (any model; shared cases). Coverage guard: claim coverage may drop by at most ${COVERAGE_GUARD}.`,
+      `Candidate arms against baseline arms (any model; shared cases). Deltas are candidate minus baseline over per-case means, with a 95% bootstrap interval over cases. Coverage guard: claim coverage may drop by at most ${COVERAGE_GUARD}.`,
       "",
-      "| Candidate | Against baseline | Cases | Error rate Δ [95% CI] | Claims Δ | Guard | Cost ratio |",
-      "|---|---|---:|---|---:|---|---:|",
+      "| Candidate | Against baseline | Cases | Error rate Δ [95% CI] | Composite Δ [95% CI] | Claims Δ | Guard | Cost ratio |",
+      "|---|---|---:|---|---|---:|---|---:|",
     );
     for (const c of cands)
       for (const b of bases) {
         const e = armContrast(c, b, (d) => d.errorRate);
         if (!e.cases) continue;
         const cl = armContrast(c, b, (d) => d.claims);
+        const co = armContrast(c, b, (d) => d.composite);
         const cc = meanCost(c),
           bc = meanCost(b);
         lines.push(
-          `| ${c[0]!.model} | ${b[0]!.model} | ${e.cases} | ${f(e.mean)} [${f(e.ci[0])}, ${f(e.ci[1])}] | ${f(cl.mean)} | ${cl.mean >= -COVERAGE_GUARD ? "ok" : "fails"} | ${cc !== undefined && bc !== undefined && cc > 0 && bc > 0 ? (bc >= cc ? `${f(bc / cc, 1)}× cheaper` : `${f(cc / bc, 1)}× costlier`) : "–"} |`,
+          `| ${c[0]!.model} | ${b[0]!.model} | ${e.cases} | ${f(e.mean)} [${f(e.ci[0])}, ${f(e.ci[1])}] | ${f(co.mean, 1)} [${f(co.ci[0], 1)}, ${f(co.ci[1], 1)}] | ${f(cl.mean)} | ${cl.mean >= -COVERAGE_GUARD ? "ok" : "fails"} | ${cc !== undefined && bc !== undefined && cc > 0 && bc > 0 ? (bc >= cc ? `${f(bc / cc, 1)}× cheaper` : `${f(cc / bc, 1)}× costlier`) : "–"} |`,
         );
       }
   }

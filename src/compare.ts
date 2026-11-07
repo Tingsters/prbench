@@ -28,6 +28,8 @@ export interface CompareOptions {
   parallel?: number;
   /** Writer models, replacing the provider's defaults; the judges stay the same. */
   models?: string[];
+  /** Writer systems (native, baseline, candidate); default all three. */
+  systems?: string[];
 }
 export function assertResume(expected: unknown, actual: unknown): void {
   if (JSON.stringify(expected) !== JSON.stringify(actual))

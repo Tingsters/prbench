@@ -217,6 +217,15 @@ program
         .map((m) => m.trim())
         .filter(Boolean),
   )
+  .option(
+    "--systems <list>",
+    "writer systems (comma-separated): native, baseline, candidate (default all three; baseline and candidate are required). Without native, only candidate vs baseline is judged",
+    (v: string) =>
+      v
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+  )
   .action(
     async (
       opts: Omit<CompareOptions, "cases"> & {

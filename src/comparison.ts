@@ -53,7 +53,10 @@ import {
 import { claudeAuthStatus } from "./agents/claude.ts";
 import {
   comparisonProvider,
+  judgedAgainst,
   manifestProvider,
+  manifestSystems,
+  selectSystems,
   skillInput,
 } from "./run/provider.ts";
 import { runPool, type PoolJob } from "./run/pool.ts";
@@ -124,6 +127,8 @@ export interface ComparisonManifest {
     /** Absent in manifests frozen before providers existed: those are Codex. */
     provider?: string;
     models: string[];
+    /** Writer systems when not all of the provider's; absent means all three. */
+    systems?: string[];
     judges: string[];
     effort: string;
     timeoutMs: number;
@@ -319,7 +324,8 @@ export function rebuildComparison(
   const provider = manifestProvider(manifest.settings),
     MODELS = manifest.settings.models,
     JUDGES = manifest.settings.judges,
-    SYSTEMS = provider.systems;
+    SYSTEMS = manifestSystems(manifest.settings, provider),
+    COMPARISONS = judgedAgainst(SYSTEMS, provider);
   const allArtifacts = new Map<string, PRArtifact>(),
     metrics: WriterMetric[] = [],
     reports: ComparisonReport[] = [],
@@ -382,7 +388,7 @@ export function rebuildComparison(
                 .length ?? 0,
           });
         }
-      for (const comparison of ["tracetoon-baseline", provider.native]) {
+      for (const comparison of COMPARISONS) {
         const pairFile = join(base, comparison, "pairs.json");
         if (!existsSync(pairFile)) continue;
         const pairs = read<PairResult[]>(pairFile),
@@ -462,7 +468,7 @@ export function rebuildComparison(
   const expectedOrders =
     loaded.length *
     MODELS.length *
-    2 *
+    COMPARISONS.length *
     JUDGES.length *
     2 *
     manifest.settings.replicates;
@@ -529,7 +535,7 @@ export function rebuildComparison(
     MODELS,
     findings,
     adjudications,
-    provider.native,
+    SYSTEMS.includes(provider.native) ? provider.native : null,
   );
   const performance = performanceReport(
     metrics,
@@ -678,12 +684,17 @@ export async function compareV2(opts: CompareOptions) {
     throw new Error("Comparison split must be dev or test.");
   const provider = comparisonProvider(opts.provider),
     MODELS = opts.models?.length ? opts.models : provider.models,
-    JUDGES = provider.judges,
-    SYSTEMS = provider.systems;
+    JUDGES = provider.judges;
   if (old && manifestProvider(old.settings).id !== provider.id)
     throw new Error(
       `This experiment was frozen for ${manifestProvider(old.settings).label}; resume it with --provider ${manifestProvider(old.settings).id}.`,
     );
+  // A resume without --systems keeps the systems the experiment was frozen with.
+  const SYSTEMS =
+    opts.systems?.length || !old
+      ? selectSystems(provider, opts.systems)
+      : manifestSystems(old.settings, provider),
+    COMPARISONS = judgedAgainst(SYSTEMS, provider);
   checkArms(MODELS, provider.id === "claude" ? "claude" : "codex");
   const parallel = Number(opts.parallel ?? 4);
   if (!Number.isSafeInteger(parallel) || parallel < 1)
@@ -781,6 +792,8 @@ export async function compareV2(opts: CompareOptions) {
       // Omitted for Codex so experiments frozen before providers keep their identity.
       ...(provider.id === "codex" ? {} : { provider: provider.id }),
       models: MODELS,
+      // Omitted for all three systems so earlier experiments keep their identity.
+      ...(SYSTEMS.length === provider.systems.length ? {} : { systems: SYSTEMS }),
       judges: JUDGES,
       effort: provider.effort,
       timeoutMs: opts.timeoutMs ?? 30 * 60_000,
@@ -866,7 +879,12 @@ export async function compareV2(opts: CompareOptions) {
   const planned = {
     writers: selected.length * MODELS.length * SYSTEMS.length * replicates,
     orders:
-      selected.length * MODELS.length * 2 * JUDGES.length * 2 * replicates,
+      selected.length *
+      MODELS.length *
+      COMPARISONS.length *
+      JUDGES.length *
+      2 *
+      replicates,
   };
   if (opts.plan) {
     const preview = preflight(selected, { cache: preflightCache });
@@ -917,6 +935,8 @@ export async function compareV2(opts: CompareOptions) {
     const plan = {
       schema: "prbench.comparison-plan/v2",
       ...planned,
+      systems: SYSTEMS,
+      judgedAgainst: COMPARISONS,
       purpose,
       replicates,
       writerContract,
@@ -1467,7 +1487,7 @@ export async function compareV2(opts: CompareOptions) {
               run: () => runWriter(replicate, model, l, system, label),
             });
           }
-        for (const comparison of ["tracetoon-baseline", provider.native])
+        for (const comparison of COMPARISONS)
           for (const l of loaded)
             for (const judge of JUDGES) {
               const label = `judge r${replicate} ${model}/${l.case.id}/${comparison}/${judge}`;

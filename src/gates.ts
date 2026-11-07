@@ -142,8 +142,8 @@ export function qualityGate(
   models: string[],
   findings: AccuracyFinding[],
   adjudications: Adjudication[] = [],
-  /** The provider's no-Tracetoon writer (`codex-native`, `claude-native`). */
-  native = "codex-native",
+  /** The provider's no-Tracetoon writer (`codex-native`, `claude-native`); null when the run had none. */
+  native: string | null = "codex-native",
 ) {
   const failures: string[] = [],
     unresolved: string[] = [];
@@ -187,7 +187,9 @@ export function qualityGate(
       if (c > b + 1e-9) improved = true;
     }
     // Consensus rows have a stable public shape; no individual judge vote can hide a flagged claim.
-    for (const comparison of ["tracetoon-baseline", native]) {
+    for (const comparison of ["tracetoon-baseline", native].filter(
+      (c): c is string => c !== null,
+    )) {
       let wins = 0,
         losses = 0;
       for (const report of reports.filter(

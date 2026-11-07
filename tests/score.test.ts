@@ -179,4 +179,46 @@ test("accuracy view: error rate, error classes, and candidate against any baseli
   // Luna's candidate (0 errors) against Luna's baseline (0.5) and Sol's (0).
   expect(md).toContain("| luna | luna | 1 | -0.50");
   expect(md).toContain("| luna | sol | 1 | 0.00");
+  // Composite Δ: Luna's baseline lost 15 points on one of two judgments; one case has no interval.
+  expect(md).toContain("| luna | luna | 1 | -0.50 [–, –] | 7.5 [–, –] |");
+  expect(md).toContain("| luna | sol | 1 | 0.00 [–, –] | 0.0 [–, –] |");
+});
+
+test("cross-model composite Δ is clustered by case, with a reproducible interval", () => {
+  const root = tempDir();
+  const write = (rel: string, v: unknown) => {
+    mkdirSync(join(root, rel, ".."), { recursive: true });
+    writeFileSync(join(root, rel), JSON.stringify(v));
+  };
+  // Baseline-only runs (no native drafts): candidate errs on case "two" in one of two replicates.
+  const j = (model: string, rep: number, c: string, candErrors: string[]) =>
+    write(`${rep === 1 ? "" : `replicate-00${rep}/`}${model}/tracetoon-baseline/judgments/v6/${c}/j/ab.json`, {
+      rubricVersion: "6",
+      judge: "codex:j@medium",
+      case: c,
+      order: "ab",
+      labels: { A: "tracetoon-baseline", B: "tracetoon-candidate" },
+      judgment: { A: side({ factualErrors: ["e"] }), B: side({ factualErrors: candErrors }), preferred: "tie" },
+    });
+  for (const model of ["luna", "sol"])
+    for (const rep of [1, 2])
+      for (const c of ["one", "two", "three"]) j(model, rep, c, c === "two" && rep === 1 ? ["e"] : []);
+  const drafts = collectDraftScores(root, () => facts);
+  expect(new Set(drafts.map((d) => d.system))).toEqual(new Set(["tracetoon-baseline", "tracetoon-candidate"]));
+  const md = accuracyMarkdown(drafts);
+  expect(md).toContain("Composite Δ [95% CI]");
+  // Per-case candidate − baseline composite: 15, 7.5, 15 → mean 12.5; bootstrap over the three cases.
+  const row = md.split("\n").find((l) => l.startsWith("| luna | sol | 3 |"))!;
+  const m = row.match(/\| (-?[\d.]+) \[(-?[\d.]+), (-?[\d.]+)\] \| [-\d.]+ \| (ok|fails) \|/)!;
+  expect(Number(m[1])).toBeCloseTo(12.5, 1);
+  expect(Number(m[2])).toBeGreaterThanOrEqual(7.5);
+  expect(Number(m[3])).toBeLessThanOrEqual(15);
+  expect(Number(m[2])).toBeLessThan(Number(m[3]));
+  expect(accuracyMarkdown(drafts)).toBe(md);
+  // The paired table shows only the baseline row when a run has no native drafts.
+  const score = scoreMarkdown(drafts);
+  const paired = score.split("Paired candidate − other system")[1]!.split("\n\n")[1]!;
+  expect(paired).toContain("| luna | tracetoon-baseline | 6 |");
+  expect(paired).toContain("| sol | tracetoon-baseline | 6 |");
+  expect(paired).not.toContain("native");
 });
