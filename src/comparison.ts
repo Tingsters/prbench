@@ -1360,7 +1360,7 @@ export async function compareV2(opts: CompareOptions) {
               });
               if (
                 controller.signal.aborted ||
-                !["transient", "no-draft", "scope"].includes(kind) ||
+                !["transient", "no-draft", "scope", "timeout"].includes(kind) ||
                 attempt === 3
               )
                 throw error;

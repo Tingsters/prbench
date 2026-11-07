@@ -141,9 +141,12 @@ test("a writer that leaves no draft is its own retryable kind, counted per arm",
   fail("k1", "002", { failureKind: "invalid", model: "luna@low", system: "tracetoon-baseline" });
   fail("k2", "001", { failureKind: "no-draft", model: "luna@low", system: "tracetoon-baseline" });
   fail("k2", "002", { failureKind: "scope", model: "luna@low", system: "tracetoon-baseline" });
+  fail("k2", "003", { failureKind: "timeout", model: "luna@low", system: "tracetoon-baseline" });
   fail("k3", "001", { failureKind: "no-draft" }); // saved before failures named their arm
-  expect(collectWriterFailures(root)).toEqual([{ model: "luna@low", system: "tracetoon-baseline", noDraft: 2, scope: 1, other: 1 }]);
-  expect(scoreMarkdown([], "S", collectWriterFailures(root))).toContain("| luna@low | tracetoon-baseline | 0 | 2 | 1 | 1 |");
+  expect(collectWriterFailures(root)).toEqual([
+    { model: "luna@low", system: "tracetoon-baseline", noDraft: 2, scope: 1, timeout: 1, other: 1 },
+  ]);
+  expect(scoreMarkdown([], "S", collectWriterFailures(root))).toContain("| luna@low | tracetoon-baseline | 0 | 2 | 1 | 1 | 1 |");
 });
 
 test("accuracy view: error rate, error classes, and candidate against any baseline arm", () => {
