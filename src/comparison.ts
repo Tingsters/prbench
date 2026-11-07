@@ -1,4 +1,6 @@
 /** Frozen, stage-addressed experiments. Quality failure is a result, not a retry. */
+import { artifactMatchesArm, checkArms } from "./run/arm.ts";
+import { collectDraftScores, scoreMarkdown } from "./report/score.ts";
 import {
   cpSync,
   existsSync,
@@ -341,7 +343,7 @@ export function rebuildComparison(
             checkArtifact(artifact).length ||
             artifact.system !== system ||
             artifact.case !== l.case.id ||
-            artifact.meta.model !== model ||
+            !artifactMatchesArm(artifact.meta, model) ||
             receipt.key !==
               writerKey(
                 manifest,
@@ -578,7 +580,13 @@ export function rebuildComparison(
       "src/performance.ts",
       "src/gates.ts",
       "src/run/status.ts",
+      "src/report/score.ts",
+      "src/report/prices.json",
     ]),
+    scores: collectDraftScores(root, (id) => {
+      const l = loaded.find((c) => c.case.id === id);
+      return l && loadFacts(l);
+    }),
     limitations: [
       `${manifest.settings.replicates} replicate(s) still represent ${loaded.length} independent cases in this split.`,
       "Writer timing includes service waits and neutral observation overhead; runtime diagnostics may overlap.",
@@ -614,6 +622,7 @@ export function rebuildComparison(
     "",
     ...summary.limitations.map((x) => `- ${x}`),
     "",
+    scoreMarkdown(summary.scores),
     ...reports.map(
       (r) =>
         `## ${r.model}, replicate ${r.replicate}: ${r.comparison}\n\n${reportMarkdown(r.report)}`,
@@ -675,11 +684,7 @@ export async function compareV2(opts: CompareOptions) {
     throw new Error(
       `This experiment was frozen for ${manifestProvider(old.settings).label}; resume it with --provider ${manifestProvider(old.settings).id}.`,
     );
-  if (
-    new Set(MODELS).size !== MODELS.length ||
-    MODELS.some((m) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(m))
-  )
-    throw new Error("--models must be distinct model ids.");
+  checkArms(MODELS, provider.id === "claude" ? "claude" : "codex");
   const parallel = Number(opts.parallel ?? 4);
   if (!Number.isSafeInteger(parallel) || parallel < 1)
     throw new Error("--parallel must be a positive integer.");
@@ -1017,7 +1022,7 @@ export async function compareV2(opts: CompareOptions) {
               checkArtifact(artifact).length ||
               artifact.case !== c.id ||
               artifact.system !== system ||
-              artifact.meta.model !== model ||
+              !artifactMatchesArm(artifact.meta, model) ||
               receipt.key !== key ||
               receipt.digest !== artifactDigest(artifact) ||
               receipt.experiment !== reuse.manifest.id
@@ -1308,7 +1313,7 @@ export async function compareV2(opts: CompareOptions) {
                 checkArtifact(value).length ||
                 value.case !== l.case.id ||
                 value.system !== system ||
-                value.meta.model !== model
+                !artifactMatchesArm(value.meta, model)
               )
                 throw new Error("Generated artifact identity is invalid.");
               // A completed generation survives a later audit rejection. Every

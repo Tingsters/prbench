@@ -1,4 +1,5 @@
 /** Unscored checks of the actual startup skill catalogue, before collecting drafts. */
+import { parseArm } from './arm.ts';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -285,8 +286,8 @@ export async function verifyComparisonIsolation(options: {
       const owner = ownSandbox(sandbox.root);
       try {
         return agent === 'claude'
-          ? await probeClaude(sandbox, model, variant, options.effort)
-          : await probeCodex(sandbox, model, variant, options.effort);
+          ? await probeClaude(sandbox, parseArm(model).model, variant, parseArm(model).effort ?? options.effort)
+          : await probeCodex(sandbox, parseArm(model).model, variant, parseArm(model).effort ?? options.effort);
       } catch (error) {
         if (!failed) {
           failed = true;

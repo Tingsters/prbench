@@ -17,6 +17,7 @@ import { DEFAULT_AGENT_OPTIONS, parseBudget } from "./systems/agentShared.ts";
 import { judgePair, type PairResult } from "./judge/pairwise.ts";
 import { parseJudge } from "./judge/providers.ts";
 import { buildReport, reportMarkdown } from "./report.ts";
+import { collectDraftScores, scoreMarkdown } from "./report/score.ts";
 import { codexLogin } from "./agents/codexAuth.ts";
 import { claudeAuthStatus, saveClaudeToken } from "./agents/claude.ts";
 import { runBothProviders } from "./run/both.ts";
@@ -749,6 +750,37 @@ program
         list(opts.systems),
         resolve(opts.out),
       );
+    },
+  );
+
+program
+  .command("score")
+  .description(
+    "Absolute per-draft scores (coverage, accuracy, rubric, cost) from saved judgments in one or more results folders",
+  )
+  .argument("<roots...>", "compare or judge output folders")
+  .option("--cases <dir>", "case directory with fact sheets")
+  .option(
+    "--dataset <id@version>",
+    "public dataset; defaults to the pinned release when --cases is omitted",
+  )
+  .option("--json", "print per-draft scores as JSON")
+  .action(
+    async (
+      roots: string[],
+      opts: { cases?: string; dataset?: string; json?: boolean },
+    ) => {
+      const { cases } = await resolveDatasetInputs(opts);
+      const facts = new Map(
+        loadAll(resolve(cases)).loaded.map((l) => [l.case.id, loadFacts(l)]),
+      );
+      const all = [];
+      for (const root of roots) {
+        const drafts = collectDraftScores(resolve(root), (id) => facts.get(id));
+        if (opts.json) all.push(...drafts.map((d) => ({ root, ...d })));
+        else console.log(scoreMarkdown(drafts, `Scores: ${root}`));
+      }
+      if (opts.json) console.log(JSON.stringify(all, null, 2));
     },
   );
 

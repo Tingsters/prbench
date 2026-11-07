@@ -1,4 +1,5 @@
 /** Keep all writer-affecting orchestration inside its dependency closure. */
+import { parseArm, writerEffort } from "./arm.ts";
 import { codexSystem } from "../systems/codex.ts";
 import { claudeComparisonSystem } from "../systems/claudeComparison.ts";
 import type { LoadedCase } from "../schema/case.ts";
@@ -25,14 +26,14 @@ export function runComparisonWriter(opts: {
     opts.agent === "claude"
       ? claudeComparisonSystem(
           !native,
-          { model: opts.model, effort: "medium", timeoutMs: opts.timeoutMs },
+          { model: parseArm(opts.model).model, effort: writerEffort(opts.model), timeoutMs: opts.timeoutMs },
           pinned,
         )
       : codexSystem(
           !native,
           {
-            model: opts.model,
-            reasoningEffort: "medium",
+            model: parseArm(opts.model).model,
+            reasoningEffort: writerEffort(opts.model),
             timeoutMs: opts.timeoutMs,
           },
           pinned,
