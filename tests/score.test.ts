@@ -7,6 +7,8 @@ import {
   caseClustered,
   collectDraftScores,
   collectWriterFailures,
+  accuracyMarkdown,
+  errorClass,
   composite,
   estimateCost,
   scoreMarkdown,
@@ -142,4 +144,36 @@ test("a writer that leaves no draft is its own retryable kind, counted per arm",
   fail("k3", "001", { failureKind: "no-draft" }); // saved before failures named their arm
   expect(collectWriterFailures(root)).toEqual([{ model: "luna@low", system: "tracetoon-baseline", noDraft: 2, scope: 1, other: 1 }]);
   expect(scoreMarkdown([], "S", collectWriterFailures(root))).toContain("| luna@low | tracetoon-baseline | 0 | 2 | 1 | 1 |");
+});
+
+test("accuracy view: error rate, error classes, and candidate against any baseline arm", () => {
+  expect(errorClass("`bun test`: 60 pass, ran on the final code")).toBe("validation");
+  expect(errorClass("adds fallback branches in belongs")).toBe("code structure");
+  expect(errorClass("Renames the module")).toBe("other");
+  const root = tempDir();
+  const write = (rel: string, v: unknown) => {
+    mkdirSync(join(root, rel, ".."), { recursive: true });
+    writeFileSync(join(root, rel), JSON.stringify(v));
+  };
+  const j = (model: string, err: string[], k: string) =>
+    write(`${model}/tracetoon-baseline/judgments/v6/one/j/${k}.json`, {
+      rubricVersion: "6",
+      judge: "codex:j@medium",
+      case: "one",
+      order: "ab",
+      labels: { A: "tracetoon-baseline", B: "tracetoon-candidate" },
+      judgment: { A: side({ factualErrors: err }), B: side(), preferred: "tie" },
+    });
+  j("luna", ["`bun test` 60 pass"], "x");
+  j("luna", [], "y");
+  j("sol", [], "x");
+  const drafts = collectDraftScores(root, () => facts);
+  const lunaBase = drafts.find((d) => d.model === "luna" && d.system === "tracetoon-baseline")!;
+  expect(lunaBase.errorRate).toBe(0.5);
+  expect(lunaBase.errorClasses).toEqual({ validation: 0.5 });
+  const md = accuracyMarkdown(drafts);
+  expect(md).toContain("| luna | tracetoon-baseline | 1 | 0.50");
+  // Luna's candidate (0 errors) against Luna's baseline (0.5) and Sol's (0).
+  expect(md).toContain("| luna | luna | 1 | -0.50");
+  expect(md).toContain("| luna | sol | 1 | 0.00");
 });

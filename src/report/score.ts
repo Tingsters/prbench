@@ -114,6 +114,26 @@ export interface DraftScore extends Components {
   inputTokens?: number;
   outputTokens?: number;
   graphQueries?: number;
+  /** Share of this draft's judgments that found at least one factual error. */
+  errorRate: number;
+  /** Mean factual errors per judgment, by class (see ERROR_CLASSES). */
+  errorClasses: Record<string, number>;
+}
+
+/**
+ * Coarse classes of factual errors, matched in order against the judge's
+ * error text. Diagnostic only: they show which kind of statement goes wrong.
+ */
+export const ERROR_CLASSES: [string, RegExp][] = [
+  ["validation", /\b(pass(es|ed)?|fail(s|ed|ures?)?|tests?|typecheck|tsc|bundle|lint|build|ran|runs?|recorded|exercised|verified|checks?)\b/i],
+  ["code structure", /branch|fallback/i],
+  ["attribution", /match|authored|wrote|agent edit|%|percent|session/i],
+  ["motivation", /because|found while|so that|motivat|reason/i],
+  ["pipeline", /comic|render|tracetoon/i],
+];
+
+export function errorClass(text: string): string {
+  return ERROR_CLASSES.find(([, rx]) => rx.test(text))?.[0] ?? "other";
 }
 
 interface SavedJudgment {
@@ -159,7 +179,13 @@ export function collectDraftScores(
   factsFor: (caseId: string) => ItemCounts | undefined,
   rubricVersion = "6",
 ): DraftScore[] {
-  type Acc = { key: Omit<DraftScore, keyof Components | "composite" | "judgments" | "judges">; comps: Components[]; judges: Set<string>; artifactDir?: string };
+  type Acc = {
+    key: Omit<DraftScore, keyof Components | "composite" | "judgments" | "judges" | "errorRate" | "errorClasses">;
+    comps: Components[];
+    classes: Record<string, number>;
+    judges: Set<string>;
+    artifactDir?: string;
+  };
   const acc = new Map<string, Acc>();
   for (const dir of judgmentDirs(root)) {
     const segs = relative(root, dir).split(sep).slice(0, -1);
@@ -186,12 +212,17 @@ export function collectDraftScores(
           a = {
             key: { model, replicate, case: j.case, system },
             comps: [],
+            classes: {},
             judges: new Set(),
             artifactDir: join(modelDir, "artifacts", j.case),
           };
           acc.set(id, a);
         }
         a.comps.push(sideComponents(j.judgment[side], facts));
+        for (const e of j.judgment[side].factualErrors ?? []) {
+          const k = errorClass(typeof e === "string" ? e : JSON.stringify(e));
+          a.classes[k] = (a.classes[k] ?? 0) + 1;
+        }
         a.judges.add(j.judge);
       }
     }
@@ -217,6 +248,8 @@ export function collectDraftScores(
       judgments: a.comps.length,
       judges: [...a.judges].sort(),
       composite: mean(a.comps.map(composite)),
+      errorRate: mean(a.comps.map((c) => (c.factualErrors > 0 ? 1 : 0))),
+      errorClasses: Object.fromEntries(Object.entries(a.classes).map(([k, n]) => [k, n / a.comps.length])),
     };
     const artifact = a.artifactDir && join(a.artifactDir, `${a.key.system}.json`);
     if (artifact && existsSync(artifact)) {
@@ -326,6 +359,83 @@ export function pairedDeltas(drafts: DraftScore[], candidate = "tracetoon-candid
 
 const f = (n: number | undefined, d = 2) => (n === undefined || !Number.isFinite(n) ? "–" : n.toFixed(d));
 
+/** Largest acceptable drop in claim coverage for an accuracy claim. */
+export const COVERAGE_GUARD = 0.05;
+
+const arms = (drafts: DraftScore[]) => {
+  const g = new Map<string, DraftScore[]>();
+  for (const d of drafts) g.set(`${d.model}\u0000${d.system}`, [...(g.get(`${d.model}\u0000${d.system}`) ?? []), d]);
+  return [...g.values()].sort((a, b) => (a[0]!.model + a[0]!.system).localeCompare(b[0]!.model + b[0]!.system));
+};
+const perCase = (ds: DraftScore[], v: (d: DraftScore) => number) => {
+  const m = new Map<string, number[]>();
+  for (const d of ds) if (Number.isFinite(v(d))) m.set(d.case, [...(m.get(d.case) ?? []), v(d)]);
+  return new Map([...m].map(([k, xs]) => [k, mean(xs)]));
+};
+const meanCost = (ds: DraftScore[]) => {
+  const c = ds.map((d) => d.costUsd).filter((x): x is number => x !== undefined);
+  return c.length ? mean(c) : undefined;
+};
+
+/**
+ * Arm `a` minus arm `b` (any models) over the cases both have: per-case means
+ * are differenced and bootstrapped over cases.
+ */
+export function armContrast(a: DraftScore[], b: DraftScore[], v: (d: DraftScore) => number, seed = 1) {
+  const pa = perCase(a, v),
+    pb = perCase(b, v);
+  const diffs = [...pa].filter(([c]) => pb.has(c)).map(([c, x]) => ({ case: c, value: x - pb.get(c)! }));
+  return caseClustered(diffs, seed);
+}
+
+/**
+ * Accuracy-first view: error rate (share of judgments finding ≥1 factual
+ * error) per arm with its error classes, and every candidate arm against
+ * every baseline arm with the coverage guard and the cost ratio.
+ */
+export function accuracyMarkdown(drafts: DraftScore[], candidate = "tracetoon-candidate", baseline = "tracetoon-baseline"): string {
+  if (!drafts.length) return "";
+  const classes = [...ERROR_CLASSES.map(([k]) => k), "other"];
+  const lines = [
+    "## Accuracy",
+    "",
+    "Error rate = share of judgments that found at least one factual error (mean of per-case means, 95% bootstrap interval over cases). Error classes are mean factual errors per judgment by kind of statement.",
+    "",
+    `| Model | System | Drafts | Error rate [95% CI] | Errors | Unsupported | Claims | ${classes.join(" | ")} | $/draft |`,
+    `|---|---|---:|---|---:|---:|---:|${classes.map(() => "---:").join("|")}|---:|`,
+  ];
+  for (const ds of arms(drafts)) {
+    const r = caseClustered(ds.map((d) => ({ case: d.case, value: d.errorRate })));
+    const m = (v: (d: DraftScore) => number) => caseClustered(ds.map((d) => ({ case: d.case, value: v(d) }))).mean;
+    lines.push(
+      `| ${ds[0]!.model} | ${ds[0]!.system} | ${ds.length} | ${f(r.mean)} [${f(r.ci[0])}, ${f(r.ci[1])}] | ${f(m((d) => d.factualErrors))} | ${f(m((d) => d.unsupportedClaims))} | ${f(m((d) => d.claims))} | ${classes.map((k) => f(m((d) => d.errorClasses[k] ?? 0))).join(" | ")} | ${f(meanCost(ds), 3)} |`,
+    );
+  }
+  const cands = arms(drafts).filter((ds) => ds[0]!.system === candidate);
+  const bases = arms(drafts).filter((ds) => ds[0]!.system === baseline);
+  if (cands.length && bases.length) {
+    lines.push(
+      "",
+      `Candidate arms against baseline arms (any model; shared cases). Coverage guard: claim coverage may drop by at most ${COVERAGE_GUARD}.`,
+      "",
+      "| Candidate | Against baseline | Cases | Error rate Δ [95% CI] | Claims Δ | Guard | Cost ratio |",
+      "|---|---|---:|---|---:|---|---:|",
+    );
+    for (const c of cands)
+      for (const b of bases) {
+        const e = armContrast(c, b, (d) => d.errorRate);
+        if (!e.cases) continue;
+        const cl = armContrast(c, b, (d) => d.claims);
+        const cc = meanCost(c),
+          bc = meanCost(b);
+        lines.push(
+          `| ${c[0]!.model} | ${b[0]!.model} | ${e.cases} | ${f(e.mean)} [${f(e.ci[0])}, ${f(e.ci[1])}] | ${f(cl.mean)} | ${cl.mean >= -COVERAGE_GUARD ? "ok" : "fails"} | ${cc !== undefined && bc !== undefined && cc > 0 && bc > 0 ? (bc >= cc ? `${f(bc / cc, 1)}× cheaper` : `${f(cc / bc, 1)}× costlier`) : "–"} |`,
+        );
+      }
+  }
+  return lines.join("\n") + "\n";
+}
+
 /** Failed writer attempts for one arm, from `attempts/writer/<key>/<NNN>/failure.json`. */
 export interface WriterFailures {
   model: string;
@@ -414,6 +524,7 @@ export function scoreMarkdown(drafts: DraftScore[], title = "Scores", failures: 
       ...failures.map((f) => `| ${f.model} | ${f.system} | ${accepted(f)} | ${f.noDraft} | ${f.scope} | ${f.other} |`),
     );
   }
+  if (drafts.length) lines.push("", accuracyMarkdown(drafts).trimEnd());
   if (drafts.some((d) => d.costSource === "estimated"))
     lines.push("", `\\* Estimated from token counts and src/report/prices.json (${PRICE_TABLE_NOTE}).`);
   return lines.join("\n") + "\n";

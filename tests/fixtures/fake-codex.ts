@@ -27,6 +27,14 @@ if (mode === 'native' || mode === 'tracetoon') {
   const check = Bun.spawnSync([process.execPath, 'test'], { stdout: 'pipe', stderr: 'pipe' });
   console.log(JSON.stringify({ type: 'item.completed', item: { id: 'fresh-check', type: 'command_execution', command: 'bun test', status: 'completed', exit_code: check.exitCode, aggregated_output: check.stdout.toString() + check.stderr.toString() } }));
 }
+// Once per marker file: type a mangled absolute skill path outside the sandbox,
+// as Luna does when it drops a TMPDIR segment. The scope audit must reject it.
+const scopeOnce = process.env.FAKE_CODEX_SCOPE_ONCE;
+if ((mode === 'native' || mode === 'tracetoon') && scopeOnce && !(await Bun.file(scopeOnce).exists())) {
+  await Bun.write(scopeOnce, 'used');
+  const command = '/var/tmp/prbench-elsewhere-x1/work/repo/.agents/skills/tracetoon/bin/tracetoon status --json';
+  console.log(JSON.stringify({ type: 'item.completed', item: { id: 'mangled', type: 'command_execution', command, status: 'completed', exit_code: 127, aggregated_output: 'No such file or directory' } }));
+}
 if (mode === 'native') sh(['gh', 'pr', 'create', '--title', 'Codex fallback', '--body', 'Greets world by default.']);
 if (mode === 'tracetoon') {
   const gitDir = Bun.spawnSync(['git', 'rev-parse', '--absolute-git-dir']).stdout.toString().trim();

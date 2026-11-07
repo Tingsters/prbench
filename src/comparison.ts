@@ -1316,13 +1316,14 @@ export async function compareV2(opts: CompareOptions) {
                 !artifactMatchesArm(value.meta, model)
               )
                 throw new Error("Generated artifact identity is invalid.");
-              // A completed generation survives a later audit rejection. Every
-              // consumer must still pass the current audit before accepting it.
+              // Only generations that pass the scope audit are cached, so a
+              // rejected sample can be retried under the same key. A rejected
+              // generation stays in its attempt folder and .isolation-failure.json.
+              assertScope(value, file, manifest.id);
               cache.put("writer", key, {
                 artifact: value,
                 status: existsSync(status) ? read(status) : null,
               });
-              assertScope(value, file, manifest.id);
               accepted = value;
               if (!cache.get("writer-content", content))
                 cache.putIfAbsent("writer-content", content, { key });

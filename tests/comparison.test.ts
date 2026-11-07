@@ -60,6 +60,7 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
       join(import.meta.dir, "fixtures", "fake-comparison-codex.ts"),
     ]),
     FAKE_CODEX_LOG: log,
+    FAKE_CODEX_SCOPE_ONCE: join(tempDir(), "scope-once"),
     FAKE_CODEX_JUDGMENT: JSON.stringify({
       A: side,
       B: side,
@@ -87,6 +88,13 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
       readFileSync(join(opts.out, "summary.json"), "utf8"),
     );
     expect(summary.writerMetrics.length).toBe(6);
+    // The first writer typed a path outside its sandbox: that sample is
+    // rejected and retried, and the run still completes.
+    const failures = Bun.spawnSync(["find", join(opts.out, "attempts", "writer"), "-name", "failure.json"])
+      .stdout.toString().trim().split("\n").filter(Boolean)
+      .map((f) => JSON.parse(readFileSync(f, "utf8")));
+    expect(failures.map((f: any) => f.failureKind)).toEqual(["scope"]);
+    expect(readFileSync(join(opts.out, "summary.md"), "utf8")).toContain("Scope-rejected attempts");
     expect(summary.reports.length).toBe(4);
     expect(
       summary.reports.every(
@@ -218,11 +226,10 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
       "outside case inputs",
     );
     expect(readFileSync(log, "utf8")).toBe(afterReplay);
+    // The current audit names the real finding (.isolation-failure.json keeps
+    // the first rejection of this key as history).
     const failure = JSON.parse(
-      readFileSync(
-        artifactPath.replace(".json", ".isolation-failure.json"),
-        "utf8",
-      ),
+      readFileSync(artifactPath.replace(".json", ".scope-audit.json"), "utf8"),
     );
     expect(failure.findings).toEqual([
       { commandId: "V99", kind: "host-agent-state" },
