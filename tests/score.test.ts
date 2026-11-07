@@ -129,6 +129,7 @@ test("collects drafts from a compare layout, averaging every judgment of a draft
 test("a writer that leaves no draft is its own retryable kind, counted per arm", () => {
   expect(failureKind(new Error("tracetoon-baseline produced no PR draft (exit 0)"))).toBe("no-draft");
   expect(failureKind(new Error("codex-native produced no PR (exit 0)"))).toBe("no-draft");
+  expect(failureKind(new Error("Host agent state or outside case inputs were accessed: V26. Preserved artifact rejected."))).toBe("scope");
   const root = tempDir();
   const fail = (key: string, n: string, v: unknown) => {
     mkdirSync(join(root, "codex", "attempts", "writer", key, n), { recursive: true });
@@ -137,7 +138,8 @@ test("a writer that leaves no draft is its own retryable kind, counted per arm",
   fail("k1", "001", { failureKind: "no-draft", model: "luna@low", system: "tracetoon-baseline" });
   fail("k1", "002", { failureKind: "invalid", model: "luna@low", system: "tracetoon-baseline" });
   fail("k2", "001", { failureKind: "no-draft", model: "luna@low", system: "tracetoon-baseline" });
+  fail("k2", "002", { failureKind: "scope", model: "luna@low", system: "tracetoon-baseline" });
   fail("k3", "001", { failureKind: "no-draft" }); // saved before failures named their arm
-  expect(collectWriterFailures(root)).toEqual([{ model: "luna@low", system: "tracetoon-baseline", noDraft: 2, other: 1 }]);
-  expect(scoreMarkdown([], "S", collectWriterFailures(root))).toContain("| luna@low | tracetoon-baseline | 0 | 2 | 1 |");
+  expect(collectWriterFailures(root)).toEqual([{ model: "luna@low", system: "tracetoon-baseline", noDraft: 2, scope: 1, other: 1 }]);
+  expect(scoreMarkdown([], "S", collectWriterFailures(root))).toContain("| luna@low | tracetoon-baseline | 0 | 2 | 1 | 1 |");
 });

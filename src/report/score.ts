@@ -331,6 +331,7 @@ export interface WriterFailures {
   model: string;
   system: string;
   noDraft: number;
+  scope: number;
   other: number;
 }
 
@@ -357,8 +358,9 @@ export function collectWriterFailures(root: string): WriterFailures[] {
           const f = JSON.parse(readFileSync(file, "utf8")) as { failureKind?: string; model?: string; system?: string };
           if (!f.model || !f.system) continue;
           const id = `${f.model}\u0000${f.system}`;
-          const row = out.get(id) ?? { model: f.model, system: f.system, noDraft: 0, other: 0 };
+          const row = out.get(id) ?? { model: f.model, system: f.system, noDraft: 0, scope: 0, other: 0 };
           if (f.failureKind === "no-draft") row.noDraft++;
+          else if (f.failureKind === "scope") row.scope++;
           else row.other++;
           out.set(id, row);
         }
@@ -407,9 +409,9 @@ export function scoreMarkdown(drafts: DraftScore[], title = "Scores", failures: 
       "",
       "Writer reliability (failed attempts are retried, up to 3 per draft; scored drafts count accepted attempts):",
       "",
-      "| Model | System | Scored drafts | No-draft attempts | Other failed attempts |",
-      "|---|---|---:|---:|---:|",
-      ...failures.map((f) => `| ${f.model} | ${f.system} | ${accepted(f)} | ${f.noDraft} | ${f.other} |`),
+      "| Model | System | Scored drafts | No-draft attempts | Scope-rejected attempts | Other failed attempts |",
+      "|---|---|---:|---:|---:|---:|",
+      ...failures.map((f) => `| ${f.model} | ${f.system} | ${accepted(f)} | ${f.noDraft} | ${f.scope} | ${f.other} |`),
     );
   }
   if (drafts.some((d) => d.costSource === "estimated"))
