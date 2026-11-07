@@ -286,8 +286,10 @@ export async function verifyComparisonIsolation(options: {
       const owner = ownSandbox(sandbox.root);
       try {
         return agent === 'claude'
-          ? await probeClaude(sandbox, parseArm(model).model, variant, parseArm(model).effort ?? options.effort)
-          : await probeCodex(sandbox, parseArm(model).model, variant, parseArm(model).effort ?? options.effort);
+          ? // The probe checks the arm's skill setup, not the writer: run it at the
+            // configured effort, since low-effort models misreport the path.
+            await probeClaude(sandbox, parseArm(model).model, variant, options.effort)
+          : await probeCodex(sandbox, parseArm(model).model, variant, options.effort);
       } catch (error) {
         if (!failed) {
           failed = true;
