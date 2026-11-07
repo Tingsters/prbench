@@ -238,6 +238,16 @@ describe('createSandbox', () => {
       expect(sb.capturedPRs()).toHaveLength(2);
       expect(gh(['pr', 'create', '--title', 'Third'], sb.env, sb.repo).stdout.trim()).toEndWith('/pull/3');
 
+      // --fill takes the title and body from the branch's commits, as the real gh does
+      // (seen from a low-effort Claude writer: `gh pr create --fill`).
+      const subjects = git(['log', '--reverse', '--no-merges', '--format=%s', 'main..HEAD'], sb.repo).split('\n');
+      expect(gh(['pr', 'create', '--fill'], sb.env, sb.repo).code).toBe(0);
+      expect(sb.capturedPRs()[3]!.title).toBe(subjects.length === 1 ? subjects[0]! : sb.branch);
+      expect(gh(['pr', 'create', '--fill-first', '--title', 'Mine'], sb.env, sb.repo).code).toBe(0);
+      expect(sb.capturedPRs()[4]).toMatchObject({ title: 'Mine' });
+      expect(gh(['pr', 'create', '--fill-first'], sb.env, sb.repo).code).toBe(0);
+      expect(sb.capturedPRs()[5]!.title).toBe(subjects[0]!);
+
       const odd = gh(['release', 'create', 'v1'], sb.env, sb.repo);
       expect(odd.code).toBe(1);
       expect(odd.stderr).toContain('unsupported command');

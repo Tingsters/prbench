@@ -326,7 +326,52 @@ export function pairedDeltas(drafts: DraftScore[], candidate = "tracetoon-candid
 
 const f = (n: number | undefined, d = 2) => (n === undefined || !Number.isFinite(n) ? "–" : n.toFixed(d));
 
-export function scoreMarkdown(drafts: DraftScore[], title = "Scores"): string {
+/** Failed writer attempts for one arm, from `attempts/writer/<key>/<NNN>/failure.json`. */
+export interface WriterFailures {
+  model: string;
+  system: string;
+  noDraft: number;
+  other: number;
+}
+
+/**
+ * Failed writer attempts per arm under a run root (or a folder of run roots).
+ * "No draft" means the writer finished without a PR or draft; it is retried
+ * and reported here as a reliability measure. Failures saved before attempts
+ * recorded their arm are skipped.
+ */
+export function collectWriterFailures(root: string): WriterFailures[] {
+  const out = new Map<string, WriterFailures>();
+  const visit = (dir: string, depth: number) => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    if (names.includes("attempts") && existsSync(join(dir, "attempts", "writer")))
+      for (const key of readdirSync(join(dir, "attempts", "writer")))
+        for (const n of readdirSync(join(dir, "attempts", "writer", key))) {
+          const file = join(dir, "attempts", "writer", key, n, "failure.json");
+          if (!existsSync(file)) continue;
+          const f = JSON.parse(readFileSync(file, "utf8")) as { failureKind?: string; model?: string; system?: string };
+          if (!f.model || !f.system) continue;
+          const id = `${f.model}\u0000${f.system}`;
+          const row = out.get(id) ?? { model: f.model, system: f.system, noDraft: 0, other: 0 };
+          if (f.failureKind === "no-draft") row.noDraft++;
+          else row.other++;
+          out.set(id, row);
+        }
+    if (depth > 0)
+      for (const n of names)
+        if (!["attempts", "inputs", "derived-reports", "artifacts", "judgments"].includes(n) && statSync(join(dir, n)).isDirectory())
+          visit(join(dir, n), depth - 1);
+  };
+  visit(root, 2);
+  return [...out.values()].sort((a, b) => (a.model + a.system).localeCompare(b.model + b.system));
+}
+
+export function scoreMarkdown(drafts: DraftScore[], title = "Scores", failures: WriterFailures[] = []): string {
   const w = WEIGHTS;
   const lines = [
     `## ${title}`,
@@ -355,6 +400,17 @@ export function scoreMarkdown(drafts: DraftScore[], title = "Scores"): string {
       lines.push(
         `| ${d.model} | ${d.against} | ${d.delta.drafts} | ${f(d.delta.mean, 1)} [${f(d.delta.ci[0], 1)}, ${f(d.delta.ci[1], 1)}] | ${f(d.errorsDelta)} |`,
       );
+  }
+  if (failures.length) {
+    const accepted = (f: WriterFailures) => drafts.filter((d) => d.model === f.model && d.system === f.system).length;
+    lines.push(
+      "",
+      "Writer reliability (failed attempts are retried, up to 3 per draft; scored drafts count accepted attempts):",
+      "",
+      "| Model | System | Scored drafts | No-draft attempts | Other failed attempts |",
+      "|---|---|---:|---:|---:|",
+      ...failures.map((f) => `| ${f.model} | ${f.system} | ${accepted(f)} | ${f.noDraft} | ${f.other} |`),
+    );
   }
   if (drafts.some((d) => d.costSource === "estimated"))
     lines.push("", `\\* Estimated from token counts and src/report/prices.json (${PRICE_TABLE_NOTE}).`);

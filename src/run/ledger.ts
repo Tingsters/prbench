@@ -73,8 +73,11 @@ export function readEvents(root: string): LedgerEvent[] {
 }
 export function failureKind(
   error: unknown,
-): "transient" | "auth" | "timeout" | "invalid" {
+): "transient" | "auth" | "timeout" | "no-draft" | "invalid" {
   const message = String(error);
+  // A writer that finished but left no PR or draft. Retried like a transient
+  // failure; the rate is reported per arm as a reliability measure.
+  if (/produced no PR/.test(message)) return "no-draft";
   if (
     /unauthori[sz]ed|invalid.grant|sign.in|authentication|refresh.token|\b401\b|\b403\b/i.test(
       message,

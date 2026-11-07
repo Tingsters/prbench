@@ -1,6 +1,6 @@
 /** Frozen, stage-addressed experiments. Quality failure is a result, not a retry. */
 import { artifactMatchesArm, checkArms } from "./run/arm.ts";
-import { collectDraftScores, scoreMarkdown } from "./report/score.ts";
+import { collectDraftScores, collectWriterFailures, scoreMarkdown } from "./report/score.ts";
 import {
   cpSync,
   existsSync,
@@ -622,7 +622,7 @@ export function rebuildComparison(
     "",
     ...summary.limitations.map((x) => `- ${x}`),
     "",
-    scoreMarkdown(summary.scores),
+    scoreMarkdown(summary.scores, "Scores", collectWriterFailures(root)),
     ...reports.map(
       (r) =>
         `## ${r.model}, replicate ${r.replicate}: ${r.comparison}\n\n${reportMarkdown(r.report)}`,
@@ -1341,6 +1341,10 @@ export async function compareV2(opts: CompareOptions) {
                 detail = redactEvidence(String(error));
               atomicJson(join(dir, "failure.json"), {
                 failureKind: kind,
+                replicate,
+                model,
+                case: l.case.id,
+                system,
                 detail,
                 durationMs: performance.now() - started,
               });
@@ -1355,7 +1359,7 @@ export async function compareV2(opts: CompareOptions) {
               });
               if (
                 controller.signal.aborted ||
-                kind !== "transient" ||
+                (kind !== "transient" && kind !== "no-draft") ||
                 attempt === 3
               )
                 throw error;

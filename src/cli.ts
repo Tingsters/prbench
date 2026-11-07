@@ -17,7 +17,7 @@ import { DEFAULT_AGENT_OPTIONS, parseBudget } from "./systems/agentShared.ts";
 import { judgePair, type PairResult } from "./judge/pairwise.ts";
 import { parseJudge } from "./judge/providers.ts";
 import { buildReport, reportMarkdown } from "./report.ts";
-import { collectDraftScores, scoreMarkdown } from "./report/score.ts";
+import { collectDraftScores, collectWriterFailures, scoreMarkdown } from "./report/score.ts";
 import { codexLogin } from "./agents/codexAuth.ts";
 import { claudeAuthStatus, saveClaudeToken } from "./agents/claude.ts";
 import { runBothProviders } from "./run/both.ts";
@@ -778,7 +778,7 @@ program
       for (const root of roots) {
         const drafts = collectDraftScores(resolve(root), (id) => facts.get(id));
         if (opts.json) all.push(...drafts.map((d) => ({ root, ...d })));
-        else console.log(scoreMarkdown(drafts, `Scores: ${root}`));
+        else console.log(scoreMarkdown(drafts, `Scores: ${root}`, collectWriterFailures(resolve(root))));
       }
       if (opts.json) console.log(JSON.stringify(all, null, 2));
     },

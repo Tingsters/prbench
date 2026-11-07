@@ -2,9 +2,11 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SideJudgment } from "../src/judge/rubric.ts";
+import { failureKind } from "../src/run/ledger.ts";
 import {
   caseClustered,
   collectDraftScores,
+  collectWriterFailures,
   composite,
   estimateCost,
   scoreMarkdown,
@@ -122,4 +124,20 @@ test("collects drafts from a compare layout, averaging every judgment of a draft
   const md = scoreMarkdown(drafts);
   expect(md).toContain("| luna | tracetoon-candidate | 2 |");
   expect(md).toContain("Paired candidate − other system");
+});
+
+test("a writer that leaves no draft is its own retryable kind, counted per arm", () => {
+  expect(failureKind(new Error("tracetoon-baseline produced no PR draft (exit 0)"))).toBe("no-draft");
+  expect(failureKind(new Error("codex-native produced no PR (exit 0)"))).toBe("no-draft");
+  const root = tempDir();
+  const fail = (key: string, n: string, v: unknown) => {
+    mkdirSync(join(root, "codex", "attempts", "writer", key, n), { recursive: true });
+    writeFileSync(join(root, "codex", "attempts", "writer", key, n, "failure.json"), JSON.stringify(v));
+  };
+  fail("k1", "001", { failureKind: "no-draft", model: "luna@low", system: "tracetoon-baseline" });
+  fail("k1", "002", { failureKind: "invalid", model: "luna@low", system: "tracetoon-baseline" });
+  fail("k2", "001", { failureKind: "no-draft", model: "luna@low", system: "tracetoon-baseline" });
+  fail("k3", "001", { failureKind: "no-draft" }); // saved before failures named their arm
+  expect(collectWriterFailures(root)).toEqual([{ model: "luna@low", system: "tracetoon-baseline", noDraft: 2, other: 1 }]);
+  expect(scoreMarkdown([], "S", collectWriterFailures(root))).toContain("| luna@low | tracetoon-baseline | 0 | 2 | 1 |");
 });
