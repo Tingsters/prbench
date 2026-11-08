@@ -169,6 +169,10 @@ export function agentArtifact(opts: {
       ...(opts.run.outputTokens !== undefined
         ? { outputTokens: opts.run.outputTokens }
         : {}),
+      ...(opts.run.usageScope ? { usageScope: opts.run.usageScope } : {}),
+      ...(opts.run.subagentThreads !== undefined
+        ? { subagentThreads: opts.run.subagentThreads }
+        : {}),
       ...(notes.length ? { notes } : {}),
     },
   };

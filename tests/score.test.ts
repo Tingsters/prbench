@@ -11,6 +11,9 @@ import {
   errorClass,
   composite,
   estimateCost,
+  leaveOneCaseOut,
+  pairedDeltas,
+  perCaseDeltaMarkdown,
   scoreMarkdown,
   sideComponents,
 } from "../src/report/score.ts";
@@ -107,6 +110,11 @@ test("collects drafts from a compare layout, averaging every judgment of a draft
   write("replicate-002/luna/tracetoon-baseline/judgments/v6/one/j/b__c__ab.json", judgment("ab", side(), side()));
   // Raw attempts are never scored.
   write("attempts/luna/tracetoon-baseline/judgments/v6/one/j/x.json", judgment("ab", side(), side()));
+  // Judge attempt folders hold a byte copy of each final judgment; it is counted once.
+  write(
+    "luna/tracetoon-baseline/judgments/v6/one/j/b__c__ab.json.attempts/k/001.accepted.json",
+    judgment("ab", side({ factualErrors: ["e"] }), side()),
+  );
   write("luna/artifacts/one/tracetoon-candidate.json", {
     meta: { model: "gpt-6-luna", inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 0, operationCounts: { "graph.queries": 3 } },
   });
@@ -221,4 +229,53 @@ test("cross-model composite Δ is clustered by case, with a reproducible interva
   expect(paired).toContain("| luna | tracetoon-baseline | 6 |");
   expect(paired).toContain("| sol | tracetoon-baseline | 6 |");
   expect(paired).not.toContain("native");
+});
+
+test("robustness: per-case composite Δ per model and a leave-one-case-out range", () => {
+  const root = tempDir();
+  const write = (rel: string, v: unknown) => {
+    mkdirSync(join(root, rel, ".."), { recursive: true });
+    writeFileSync(join(root, rel), JSON.stringify(v));
+  };
+  // Candidate loses 15 points (one factual error) on the listed cases only.
+  const j = (model: string, c: string, candErrors: string[]) =>
+    write(`${model}/tracetoon-baseline/judgments/v6/${c}/j/ab.json`, {
+      rubricVersion: "6",
+      judge: "codex:j@medium",
+      case: c,
+      order: "ab",
+      labels: { A: "tracetoon-baseline", B: "tracetoon-candidate" },
+      judgment: { A: side(), B: side({ factualErrors: candErrors }), preferred: "tie" },
+    });
+  for (const c of ["pr1", "pr2", "pr10"]) j("luna", c, c === "pr2" ? ["e"] : []);
+  for (const c of ["pr1", "pr2"]) j("sol", c, ["e"]);
+  const drafts = collectDraftScores(root, () => facts);
+  expect(leaveOneCaseOut([{ case: "a", value: 1 }])).toBeUndefined();
+  expect(leaveOneCaseOut([
+    { case: "a", value: 0 },
+    { case: "b", value: -15 },
+    { case: "c", value: 0 },
+  ])).toEqual([-7.5, 0]);
+  const deltas = pairedDeltas(drafts);
+  const luna = deltas.find((d) => d.model === "luna")!;
+  expect([...luna.perCase]).toEqual([
+    ["pr1", { mean: 0, pairs: 1 }],
+    ["pr10", { mean: 0, pairs: 1 }],
+    ["pr2", { mean: -15, pairs: 1 }],
+  ]);
+  expect(luna.delta.mean).toBeCloseTo(-5, 9);
+  expect(luna.leaveOneOut).toEqual([-7.5, 0]);
+  const md = scoreMarkdown(drafts);
+  expect(md).toContain("| luna | tracetoon-baseline | 3 | -5.0 [");
+  expect(md).toContain("] | -7.5 to 0.0 | 0.33 |");
+  expect(md).toContain("| sol | tracetoon-baseline | 2 | -15.0 [");
+  const table = perCaseDeltaMarkdown(drafts);
+  expect(table).toContain("| Case | luna | sol |");
+  // Cases sort numerically; a model without a case shows a dash.
+  expect(table.split("\n").filter((l) => /^\| pr/.test(l))).toEqual([
+    "| pr1 | 0.0 (1) | -15.0 (1) |",
+    "| pr2 | -15.0 (1) | -15.0 (1) |",
+    "| pr10 | 0.0 (1) | – |",
+  ]);
+  expect(table).toContain("| Mean of cases | -5.0 | -15.0 |");
 });

@@ -10,6 +10,10 @@ export interface AgentRunResult {
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
+  /** What the token counts cover: the main thread only, or every subagent thread too. */
+  usageScope?: "main-thread" | "all-threads";
+  /** Subagent threads included in the token counts. */
+  subagentThreads?: number;
   numTurns?: number;
   durationMs: number;
   stageTimings?: Record<string, number>;

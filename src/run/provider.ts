@@ -30,6 +30,12 @@ export interface ComparisonProvider {
   command(): string[];
   label: string;
   environmentHash(): string;
+  /**
+   * The hash before shell and session bookkeeping was excluded. An experiment
+   * frozen with it keeps it on resume from the same shell, so its identity and
+   * writer keys don't change.
+   */
+  legacyEnvironmentHash(): string;
   authProfileHash(): string;
 }
 
@@ -42,6 +48,95 @@ const HOME_KEYS = [
   "XDG_DATA_HOME",
 ];
 
+/**
+ * Shell, terminal and session bookkeeping on top of VOLATILE_ENV: where and
+ * from which window or session a command was typed. It differs between shells
+ * launching the same experiment and never changes what a writer does, so it is
+ * left out of the writer environment identity. Variables that can change a
+ * writer (PATH, TMPDIR, LANG, provider settings, tool configuration) stay in.
+ */
+export const SHELL_VOLATILE_ENV = [
+  ...VOLATILE_ENV,
+  "PWD",
+  "OLDPWD",
+  "INIT_CWD",
+  "SHLVL",
+  "_",
+  "CLAUDECODE",
+  "TERM_SESSION_ID",
+  "TERM_PROGRAM_VERSION",
+  "ITERM_SESSION_ID",
+  "ITERM_PROFILE",
+  "WINDOWID",
+  "TMUX",
+  "TMUX_PANE",
+  "STY",
+  "WT_SESSION",
+  "WT_PROFILE_ID",
+  "SSH_CLIENT",
+  "SSH_CONNECTION",
+  "SSH_TTY",
+  "COLUMNS",
+  "LINES",
+  "XAUTHORITY",
+  "DESKTOP_STARTUP_ID",
+  "XDG_ACTIVATION_TOKEN",
+  "GNOME_TERMINAL_SCREEN",
+  "GNOME_TERMINAL_SERVICE",
+  "KITTY_WINDOW_ID",
+  "KITTY_PID",
+  "KITTY_LISTEN_ON",
+  "ALACRITTY_WINDOW_ID",
+  "ALACRITTY_SOCKET",
+  "ALACRITTY_LOG",
+  "WEZTERM_PANE",
+  "WEZTERM_UNIX_SOCKET",
+  "SECURITYSESSIONID",
+  "__CFBUNDLEIDENTIFIER",
+  "TERMINAL_EMULATOR",
+];
+export const SHELL_VOLATILE_PREFIXES = [
+  ...VOLATILE_PREFIXES,
+  "VSCODE_",
+  "ZED_",
+  "GHOSTTY_",
+  "PRBENCH_SHELL_",
+];
+
+export function isShellVolatile(key: string): boolean {
+  const k = key.toUpperCase();
+  return (
+    SHELL_VOLATILE_ENV.includes(k) ||
+    SHELL_VOLATILE_PREFIXES.some((p) => k.startsWith(p))
+  );
+}
+
+const CODEX_HASH_EXCLUDED = [
+  "CODEX_HOME",
+  ...HOME_KEYS,
+  "FAKE_CODEX_JUDGMENT",
+  "FAKE_CODEX_SKIP_OUTPUT_FILE",
+];
+function codexComparableEnv(
+  env: Record<string, string | undefined>,
+  dropVolatile: boolean,
+) {
+  return Object.fromEntries(
+    Object.entries(codexRunEnv(env)).filter(
+      ([key]) =>
+        !CODEX_HASH_EXCLUDED.includes(key.toUpperCase()) &&
+        !(dropVolatile && isShellVolatile(key)),
+    ),
+  );
+}
+
+/** Writer environment identity for Codex comparisons, without shell and session bookkeeping. */
+export function codexEnvironmentHash(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return stageKey("writer-environment", codexComparableEnv(env, true));
+}
+
 const CODEX: ComparisonProvider = {
   id: "codex",
   models: ["gpt-6.1-sol", "gpt-6.1-terra"],
@@ -51,29 +146,20 @@ const CODEX: ComparisonProvider = {
   systems: ["codex-native", "tracetoon-baseline", "tracetoon-candidate"],
   command: () => codexCommand(),
   label: "Codex",
+  environmentHash: () => codexEnvironmentHash(),
   // Byte-compatible with experiments frozen before providers existed.
-  environmentHash: () =>
-    stageKey(
-      "writer-environment",
-      Object.fromEntries(
-        Object.entries(codexRunEnv(process.env)).filter(
-          ([key]) =>
-            ![
-              "CODEX_HOME",
-              ...HOME_KEYS,
-              "FAKE_CODEX_JUDGMENT",
-              "FAKE_CODEX_SKIP_OUTPUT_FILE",
-            ].includes(key.toUpperCase()),
-        ),
-      ),
-    ),
+  legacyEnvironmentHash: () =>
+    stageKey("writer-environment", codexComparableEnv(process.env, false)),
   authProfileHash: () => digest(codexAuthHome()),
 };
 
 /** Environment that can change what a Claude writer does, minus secrets and homes. */
-function claudeComparableEnv(): Record<string, string | undefined> {
+function claudeComparableEnv(
+  env: Record<string, string | undefined> = process.env,
+  dropVolatile = true,
+): Record<string, string | undefined> {
   return Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => {
+    Object.entries(env).filter(([key]) => {
       const k = key.toUpperCase();
       return (
         !HOME_KEYS.includes(k) &&
@@ -90,10 +176,18 @@ function claudeComparableEnv(): Record<string, string | undefined> {
         // Shell and launcher bookkeeping: where the command was typed from,
         // not anything a writer sees (each runs in its own sandbox cwd).
         !["PWD", "OLDPWD", "INIT_CWD", "SHLVL", "_"].includes(k) &&
-        !k.startsWith("NPM_")
+        !k.startsWith("NPM_") &&
+        !(dropVolatile && isShellVolatile(k))
       );
     }),
   );
+}
+
+/** Writer environment identity for Claude comparisons, without shell and session bookkeeping. */
+export function claudeEnvironmentHash(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return stageKey("writer-environment", { claude: claudeComparableEnv(env) });
 }
 
 const CLAUDE: ComparisonProvider = {
@@ -105,8 +199,11 @@ const CLAUDE: ComparisonProvider = {
   systems: ["claude-native", "tracetoon-baseline", "tracetoon-candidate"],
   command: () => claudeCommand(),
   label: "Claude",
-  environmentHash: () =>
-    stageKey("writer-environment", { claude: claudeComparableEnv() }),
+  environmentHash: () => claudeEnvironmentHash(),
+  legacyEnvironmentHash: () =>
+    stageKey("writer-environment", {
+      claude: claudeComparableEnv(process.env, false),
+    }),
   // Which credential source is used, never the credential itself.
   authProfileHash: () => digest(`claude:${claudeAuthStatus().source}`),
 };

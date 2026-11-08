@@ -58,6 +58,7 @@ import {
   manifestSystems,
   selectSystems,
   skillInput,
+  type ComparisonProvider,
 } from "./run/provider.ts";
 import { runPool, type PoolJob } from "./run/pool.ts";
 import { PR_PROMPT } from "./systems/agentShared.ts";
@@ -214,6 +215,21 @@ function verifyFrozen(root: string, manifest: ComparisonManifest) {
     ),
   );
   return profile;
+}
+/**
+ * The writer environment identity. Experiments frozen before shell and session
+ * bookkeeping was excluded keep their legacy hash when it still matches (a
+ * resume from the same shell), so their identity and writer keys hold.
+ */
+export function writerEnvironmentHash(
+  provider: Pick<ComparisonProvider, "environmentHash" | "legacyEnvironmentHash">,
+  ...frozen: (ComparisonManifest | undefined)[]
+): string {
+  const current = provider.environmentHash();
+  const recorded = frozen.map((m) => m?.settings?.toolchain?.environmentHash);
+  if (recorded.includes(current)) return current;
+  const legacy = provider.legacyEnvironmentHash();
+  return recorded.includes(legacy) ? legacy : current;
 }
 function writerKey(
   manifest: ComparisonManifest,
@@ -808,7 +824,16 @@ export async function compareV2(opts: CompareOptions) {
         node: process.version,
         platform: process.platform,
         arch: process.arch,
-        environmentHash: provider.environmentHash(),
+        environmentHash: writerEnvironmentHash(
+          provider,
+          old,
+          opts.reuseFrom &&
+            existsSync(join(resolve(opts.reuseFrom), "manifest.json"))
+            ? read<ComparisonManifest>(
+                join(resolve(opts.reuseFrom), "manifest.json"),
+              )
+            : undefined,
+        ),
         authProfileHash: provider.authProfileHash(),
         executableSha256: digest(readFileSync(process.execPath)),
         owner: ownerIdentity(),

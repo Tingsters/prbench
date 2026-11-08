@@ -9,7 +9,8 @@
  * every judgment of it (all judges, both orders, every pairing).
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
+import { codexUsageFromDir, type CodexUsage } from "../agents/codexUsage.ts";
 import type { SideJudgment } from "../judge/rubric.ts";
 import type { Facts } from "../schema/case.ts";
 import { bootstrapMeanCI, mean } from "../stats.ts";
@@ -112,7 +113,17 @@ export interface DraftScore extends Components {
   costUsd?: number;
   costSource?: "reported" | "estimated";
   inputTokens?: number;
+  cachedInputTokens?: number;
   outputTokens?: number;
+  /**
+   * What the tokens and estimated cost cover: "all-threads" includes every
+   * subagent thread; "main-thread" is a Codex draft whose subagent usage is
+   * unknown (no saved traces). Undefined for reported costs.
+   */
+  usageScope?: "all-threads" | "main-thread";
+  /** Where all-thread usage came from: the artifact itself or its saved writer traces. */
+  usageSource?: "artifact" | "traces";
+  subagentThreads?: number;
   graphQueries?: number;
   /** Share of this draft's judgments that found at least one factual error. */
   errorRate: number;
@@ -144,10 +155,17 @@ interface SavedJudgment {
   judgment?: { A: SideJudgment; B: SideJudgment };
 }
 
+/**
+ * Final judgment files under a `judgments` folder. `<order>.json.attempts/`
+ * folders hold raw judge attempts, and their `NNN.accepted.json` is a byte copy
+ * of the final judgment, so they are skipped to count each judgment once.
+ */
 function* files(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) yield* files(p);
+    if (statSync(p).isDirectory()) {
+      if (!name.endsWith(".attempts")) yield* files(p);
+    }
     else if (name.endsWith(".json")) yield p;
   }
 }
@@ -254,14 +272,31 @@ export function collectDraftScores(
     const artifact = a.artifactDir && join(a.artifactDir, `${a.key.system}.json`);
     if (artifact && existsSync(artifact)) {
       const meta = JSON.parse(readFileSync(artifact, "utf8")).meta ?? {};
-      d.inputTokens = meta.inputTokens;
-      d.outputTokens = meta.outputTokens;
+      let tokens: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number } = meta;
+      if (meta.agent === "codex" && typeof meta.costUsd !== "number") {
+        if (meta.usageScope === "all-threads") {
+          d.usageScope = "all-threads";
+          d.usageSource = "artifact";
+          d.subagentThreads = meta.subagentThreads;
+        } else {
+          const usage = writerTraceUsage(root, artifact);
+          if (usage && (meta.inputTokens === undefined || usage.inputTokens >= meta.inputTokens)) {
+            tokens = usage;
+            d.usageScope = "all-threads";
+            d.usageSource = "traces";
+            d.subagentThreads = usage.subagentThreads;
+          } else if (meta.inputTokens !== undefined) d.usageScope = "main-thread";
+        }
+      }
+      d.inputTokens = tokens.inputTokens;
+      d.cachedInputTokens = tokens.cachedInputTokens;
+      d.outputTokens = tokens.outputTokens;
       d.graphQueries = meta.operationCounts?.["graph.queries"];
       if (typeof meta.costUsd === "number") {
         d.costUsd = meta.costUsd;
         d.costSource = "reported";
       } else {
-        const est = estimateCost(String(meta.model ?? a.key.model), meta);
+        const est = estimateCost(String(meta.model ?? a.key.model), tokens);
         if (est !== undefined) {
           d.costUsd = est;
           d.costSource = "estimated";
@@ -273,6 +308,44 @@ export function collectDraftScores(
   return drafts.sort((x, y) =>
     [x.model, x.system, x.case, x.replicate].join("|").localeCompare([y.model, y.system, y.case, y.replicate].join("|")),
   );
+}
+
+/**
+ * All-thread Codex usage for a saved artifact, recomputed from the writer
+ * traces of its accepted attempt: `<run>/attempts/writer/<key>/<NNN>/<case>/<system>.traces/`,
+ * where the key comes from the artifact's receipt and the accepted attempt is
+ * the latest one without a failure record. Lets runs saved before subagent
+ * usage was counted be re-scored without new calls.
+ */
+export function writerTraceUsage(root: string, artifactFile: string): CodexUsage | undefined {
+  const receiptFile = artifactFile.replace(/\.json$/, ".receipt.json");
+  if (!existsSync(receiptFile)) return undefined;
+  let key: unknown;
+  try {
+    key = JSON.parse(readFileSync(receiptFile, "utf8")).key;
+  } catch {
+    return undefined;
+  }
+  if (typeof key !== "string" || !/^[0-9a-f]{16,}$/.test(key)) return undefined;
+  const caseId = dirname(artifactFile).split(sep).at(-1)!;
+  const system = artifactFile.split(sep).at(-1)!.replace(/\.json$/, "");
+  // The run root holding `attempts/` is the artifact's nearest ancestor with one, within the scored root.
+  const stop = join(root, "..");
+  for (let dir = dirname(artifactFile); dir !== stop && dir !== dirname(dir); dir = dirname(dir)) {
+    const keyDir = join(dir, "attempts", "writer", key);
+    if (!existsSync(keyDir)) continue;
+    const attempts = readdirSync(keyDir)
+      .filter((n) => /^\d{3}$/.test(n))
+      .sort()
+      .reverse();
+    for (const n of attempts) {
+      if (existsSync(join(keyDir, n, "failure.json"))) continue;
+      const traces = join(keyDir, n, caseId, `${system}.traces`);
+      if (existsSync(traces)) return codexUsageFromDir(traces);
+    }
+    return undefined;
+  }
+  return undefined;
 }
 
 /** Mean of per-case means, with a bootstrap interval over cases (cases are the independent unit). */
@@ -297,6 +370,30 @@ export interface ArmScore {
   costSource?: string;
   inputTokens?: number;
   graphQueries?: number;
+  /** What the arm's cost covers, e.g. "all threads (traces)" or "main thread only". */
+  costCovers?: string;
+  /** Mean subagent threads per draft, where known. */
+  subagentThreads?: number;
+}
+
+/** Which threads a set of drafts' costs cover, for the report. */
+export function costCovers(ds: DraftScore[]): string | undefined {
+  const costed = ds.filter((d) => d.costUsd !== undefined);
+  if (!costed.length) return undefined;
+  const label = (d: DraftScore) =>
+    d.costSource === "reported"
+      ? "reported total"
+      : d.usageScope === "all-threads"
+        ? d.usageSource === "traces"
+          ? "all threads (traces)"
+          : "all threads"
+        : d.usageScope === "main-thread"
+          ? "main thread only"
+          : "as reported in tokens";
+  const labels = [...new Set(costed.map(label))];
+  if (labels.length === 1) return labels[0];
+  const all = costed.filter((d) => d.usageScope === "all-threads").length;
+  return `mixed: ${all}/${costed.length} all threads`;
 }
 
 export function armScores(drafts: DraftScore[]): ArmScore[] {
@@ -311,6 +408,7 @@ export function armScores(drafts: DraftScore[]): ArmScore[] {
     const sources = [...new Set(ds.map((d) => d.costSource).filter(Boolean))];
     const inputs = ds.map((d) => d.inputTokens).filter((c): c is number => c !== undefined);
     const queries = ds.map((d) => d.graphQueries).filter((c): c is number => c !== undefined);
+    const subs = ds.map((d) => d.subagentThreads).filter((c): c is number => c !== undefined);
     return {
       model: ds[0]!.model,
       system: ds[0]!.system,
@@ -328,13 +426,35 @@ export function armScores(drafts: DraftScore[]): ArmScore[] {
       costSource: sources.join("+") || undefined,
       inputTokens: inputs.length ? mean(inputs) : undefined,
       graphQueries: queries.length ? mean(queries) : undefined,
+      costCovers: costCovers(ds),
+      subagentThreads: subs.length ? mean(subs) : undefined,
     };
   });
 }
 
+/**
+ * Range of a case-clustered mean when each case in turn is left out: how much
+ * the result leans on any single case. Undefined with fewer than two cases.
+ */
+export function leaveOneCaseOut(rows: { case: string; value: number }[]): [number, number] | undefined {
+  const cases = [...new Set(rows.filter((r) => Number.isFinite(r.value)).map((r) => r.case))];
+  if (cases.length < 2) return undefined;
+  const means = cases.map((left) => caseClustered(rows.filter((r) => r.case !== left)).mean);
+  return [Math.min(...means), Math.max(...means)];
+}
+
 /** Candidate minus another system, paired by model, case and replicate, clustered by case. */
 export function pairedDeltas(drafts: DraftScore[], candidate = "tracetoon-candidate") {
-  const out: { model: string; against: string; delta: ReturnType<typeof caseClustered>; errorsDelta: number }[] = [];
+  const out: {
+    model: string;
+    against: string;
+    delta: ReturnType<typeof caseClustered>;
+    errorsDelta: number;
+    /** Mean composite Δ per case, over that case's paired replicates. */
+    perCase: Map<string, { mean: number; pairs: number }>;
+    /** Min and max of the composite Δ with each case left out. */
+    leaveOneOut?: [number, number];
+  }[] = [];
   const models = [...new Set(drafts.map((d) => d.model))];
   const systems = [...new Set(drafts.map((d) => d.system))].filter((s) => s !== candidate);
   for (const model of models)
@@ -346,15 +466,51 @@ export function pairedDeltas(drafts: DraftScore[], candidate = "tracetoon-candid
         );
         if (o) rows.push({ case: c.case, value: c.composite - o.composite, err: c.factualErrors - o.factualErrors });
       }
-      if (rows.length)
-        out.push({
-          model,
-          against,
-          delta: caseClustered(rows),
-          errorsDelta: caseClustered(rows.map((r) => ({ case: r.case, value: r.err }))).mean,
-        });
+      if (!rows.length) continue;
+      const perCase = new Map<string, { mean: number; pairs: number }>();
+      for (const c of [...new Set(rows.map((r) => r.case))].sort()) {
+        const xs = rows.filter((r) => r.case === c && Number.isFinite(r.value)).map((r) => r.value);
+        perCase.set(c, { mean: xs.length ? mean(xs) : NaN, pairs: xs.length });
+      }
+      out.push({
+        model,
+        against,
+        delta: caseClustered(rows),
+        errorsDelta: caseClustered(rows.map((r) => ({ case: r.case, value: r.err }))).mean,
+        perCase,
+        leaveOneOut: leaveOneCaseOut(rows),
+      });
     }
   return out;
+}
+
+/**
+ * Per-case composite Δ (candidate − same-model baseline), one column per
+ * model, so a mean driven by one or two cases is visible.
+ */
+export function perCaseDeltaMarkdown(drafts: DraftScore[], candidate = "tracetoon-candidate", baseline = "tracetoon-baseline"): string {
+  const deltas = pairedDeltas(drafts, candidate).filter((d) => d.against === baseline);
+  if (!deltas.length) return "";
+  const cases = [...new Set(deltas.flatMap((d) => [...d.perCase.keys()]))].sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true }),
+  );
+  const lines = [
+    `Per-case composite Δ (${candidate} − ${baseline}, same model; mean over paired replicates, pairs in parentheses):`,
+    "",
+    `| Case | ${deltas.map((d) => d.model).join(" | ")} |`,
+    `|---|${deltas.map(() => "---:").join("|")}|`,
+  ];
+  for (const c of cases)
+    lines.push(
+      `| ${c} | ${deltas
+        .map((d) => {
+          const v = d.perCase.get(c);
+          return v ? `${f(v.mean, 1)} (${v.pairs})` : "–";
+        })
+        .join(" | ")} |`,
+    );
+  lines.push(`| Mean of cases | ${deltas.map((d) => f(d.delta.mean, 1)).join(" | ")} |`);
+  return lines.join("\n");
 }
 
 const f = (n: number | undefined, d = 2) => (n === undefined || !Number.isFinite(n) ? "–" : n.toFixed(d));
@@ -493,28 +649,30 @@ export function scoreMarkdown(drafts: DraftScore[], title = "Scores", failures: 
     "",
     `Composite (0-100) = ${w.claims}·claims + ${w.context}·context + ${w.uncertainties}·uncertainties + ${w.rubric}·rubric (coverage as fractions of the fact sheet, rubric as mean/2) − ${w.factualError}·factual errors − ${w.unsupportedClaim}·unsupported claims − ${w.trap}·traps hit, floored at 0. Each draft is averaged over all its judgments; arm means are means of per-case means, with a 95% bootstrap interval over cases. Components are the primary evidence; the composite is a summary.`,
     "",
-    "| Model | System | Drafts | Composite [95% CI] | Claims | Context | Uncert. | Rubric | Errors | Unsupported | Traps | $/draft | Input tokens | Queries |",
-    "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Model | System | Drafts | Composite [95% CI] | Claims | Context | Uncert. | Rubric | Errors | Unsupported | Traps | $/draft | Cost covers | Subagents/draft | Input tokens | Queries |",
+    "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|",
   ];
   for (const a of armScores(drafts).sort((x, y) => (x.model + x.system).localeCompare(y.model + y.system))) {
     const c = a.components;
     lines.push(
-      `| ${a.model} | ${a.system} | ${a.composite.drafts} | ${f(a.composite.mean, 1)} [${f(a.composite.ci[0], 1)}, ${f(a.composite.ci[1], 1)}] | ${f(c.claims)} | ${f(c.context)} | ${f(c.uncertainties)} | ${f(c.rubric)} | ${f(c.factualErrors)} | ${f(c.unsupportedClaims)} | ${f(c.traps)} | ${a.costUsd === undefined ? "–" : `${f(a.costUsd, 3)}${a.costSource === "estimated" ? "*" : ""}`} | ${a.inputTokens === undefined ? "–" : Math.round(a.inputTokens)} | ${f(a.graphQueries, 1)} |`,
+      `| ${a.model} | ${a.system} | ${a.composite.drafts} | ${f(a.composite.mean, 1)} [${f(a.composite.ci[0], 1)}, ${f(a.composite.ci[1], 1)}] | ${f(c.claims)} | ${f(c.context)} | ${f(c.uncertainties)} | ${f(c.rubric)} | ${f(c.factualErrors)} | ${f(c.unsupportedClaims)} | ${f(c.traps)} | ${a.costUsd === undefined ? "–" : `${f(a.costUsd, 3)}${a.costSource === "estimated" ? "*" : ""}`} | ${a.costCovers ?? "–"} | ${f(a.subagentThreads, 1)} | ${a.inputTokens === undefined ? "–" : Math.round(a.inputTokens)} | ${f(a.graphQueries, 1)} |`,
     );
   }
   const deltas = pairedDeltas(drafts);
   if (deltas.length) {
     lines.push(
       "",
-      "Paired candidate − other system (same model, case and replicate):",
+      "Paired candidate − other system (same model, case and replicate). Leave one case out = lowest and highest composite Δ when each case in turn is dropped:",
       "",
-      "| Model | Against | Pairs | Composite Δ [95% CI] | Factual errors Δ |",
-      "|---|---|---:|---|---:|",
+      "| Model | Against | Pairs | Composite Δ [95% CI] | Leave one case out | Factual errors Δ |",
+      "|---|---|---:|---|---|---:|",
     );
     for (const d of deltas)
       lines.push(
-        `| ${d.model} | ${d.against} | ${d.delta.drafts} | ${f(d.delta.mean, 1)} [${f(d.delta.ci[0], 1)}, ${f(d.delta.ci[1], 1)}] | ${f(d.errorsDelta)} |`,
+        `| ${d.model} | ${d.against} | ${d.delta.drafts} | ${f(d.delta.mean, 1)} [${f(d.delta.ci[0], 1)}, ${f(d.delta.ci[1], 1)}] | ${d.leaveOneOut ? `${f(d.leaveOneOut[0], 1)} to ${f(d.leaveOneOut[1], 1)}` : "–"} | ${f(d.errorsDelta)} |`,
       );
+    const perCase = perCaseDeltaMarkdown(drafts);
+    if (perCase) lines.push("", perCase);
   }
   if (failures.length) {
     const accepted = (f: WriterFailures) => drafts.filter((d) => d.model === f.model && d.system === f.system).length;
@@ -530,6 +688,11 @@ export function scoreMarkdown(drafts: DraftScore[], title = "Scores", failures: 
   if (drafts.length) lines.push("", accuracyMarkdown(drafts).trimEnd());
   if (drafts.some((d) => d.costSource === "estimated"))
     lines.push("", `\\* Estimated from token counts and src/report/prices.json (${PRICE_TABLE_NOTE}).`);
+  if (drafts.some((d) => d.usageScope))
+    lines.push(
+      "",
+      "Cost covers: \"all threads\" includes every subagent thread the writer spawned (researcher, drafter, reviewer…), from the artifact or, for runs saved before that was recorded, recomputed from the accepted attempt's saved Codex traces (\"traces\"), with each model response counted once. \"Main thread only\" omits subagents and understates cost when the skill delegates. $/draft in the accuracy table and its cost ratios use the same figures.",
+    );
   return lines.join("\n") + "\n";
 }
 

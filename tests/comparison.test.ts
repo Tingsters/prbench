@@ -342,7 +342,7 @@ test("a run without native completes, scores, and records its systems for resume
     expect(summary.scores.length).toBe(4);
     expect(summary.scores.some((d: any) => d.system === "codex-native")).toBe(false);
     const md = readFileSync(join(opts.out, "summary.md"), "utf8");
-    expect(md).toContain("| gpt-6.1-sol | tracetoon-baseline | 1 | 0.0 [–, –] | 0.00 |");
+    expect(md).toContain("| gpt-6.1-sol | tracetoon-baseline | 1 | 0.0 [–, –] | – | 0.00 |");
     expect(md.split("Paired candidate − other system")[1]!.split("\n\n")[1]).not.toContain("native");
     expect(md).toContain("Composite Δ [95% CI]");
     const manifest = JSON.parse(readFileSync(join(opts.out, "manifest.json"), "utf8"));
