@@ -9,6 +9,12 @@
  * plus the last response). A fork may replay its parent's history, so records
  * are counted once per response id and attributed to the thread named in the
  * record, not to the file that holds it.
+ *
+ * Threads can run on different models (a skill may spawn a reviewer with
+ * `spawn_agent { model: ... }`), so each response is attributed to the model
+ * of its turn: the `turn_context` event with the record's `turn_id`, else the
+ * thread's `thread_settings_applied` model, else the latest `turn_context` in
+ * the same file. Usage is also reported per model so it can be priced per model.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -23,7 +29,18 @@ export interface CodexThreadUsage {
   outputTokens: number;
   /** Model responses counted for this thread. */
   responses: number;
+  /** Models this thread's responses ran on, where the rollout records them. */
+  models: string[];
 }
+
+export interface TokenUsage {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+}
+
+/** Usage per model. Tokens from responses whose model is unknown are not in any entry. */
+export type UsageByModel = Record<string, TokenUsage>;
 
 export interface CodexUsage {
   inputTokens: number;
@@ -31,6 +48,7 @@ export interface CodexUsage {
   outputTokens: number;
   threads: CodexThreadUsage[];
   subagentThreads: number;
+  usageByModel: UsageByModel;
 }
 
 interface Totals {
@@ -54,26 +72,40 @@ export function codexUsageFromRollouts(texts: string[]): CodexUsage | undefined 
         cachedInputTokens: 0,
         outputTokens: 0,
         responses: 0,
+        models: [],
       };
       threads.set(id, t);
     }
     return t;
   };
-  const add = (t: CodexThreadUsage, u: Totals) => {
-    t.inputTokens += count(u.input_tokens);
-    t.cachedInputTokens += Math.min(
-      count(u.cached_input_tokens),
-      count(u.input_tokens),
-    );
-    t.outputTokens += count(u.output_tokens);
+  const byModel: UsageByModel = {};
+  const add = (t: CodexThreadUsage, u: Totals, model: string | undefined) => {
+    const input = count(u.input_tokens),
+      cached = Math.min(count(u.cached_input_tokens), input),
+      output = count(u.output_tokens);
+    t.inputTokens += input;
+    t.cachedInputTokens += cached;
+    t.outputTokens += output;
     t.responses++;
+    if (!model) return;
+    if (!t.models.includes(model)) t.models.push(model);
+    const m = (byModel[model] ??= { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 });
+    m.inputTokens += input;
+    m.cachedInputTokens += cached;
+    m.outputTokens += output;
   };
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  // Model attribution, gathered from every file before any usage is counted.
+  const turnModel = new Map<string, string>();
+  const threadModel = new Map<string, string>();
+  const pending: { id: string; turnId?: string; model?: string; fileModel?: string; usage: Totals }[] = [];
   const seen = new Set<string>();
-  // Per file: its own thread, and its last running total after any replayed history.
-  const fallbacks: { id: string; total?: Totals }[] = [];
+  // Per file: its own thread, its model, and its last running total after any replayed history.
+  const fallbacks: { id: string; total?: Totals; model?: string }[] = [];
   for (const text of texts) {
     let own: string | undefined, historyStart: number | undefined;
     let total: Totals | undefined;
+    let fileModel: string | undefined, ownModel: string | undefined;
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;
       let e: any;
@@ -84,6 +116,10 @@ export function codexUsageFromRollouts(texts: string[]): CodexUsage | undefined 
       }
       const p = e?.payload;
       if (!p || typeof p !== "object") continue;
+      const replayed =
+        historyStart !== undefined &&
+        typeof e.ordinal === "number" &&
+        e.ordinal < historyStart;
       if (e.type === "session_meta") {
         // The first session_meta is the file's own thread; later ones are replayed parents.
         if (own === undefined && typeof p.id === "string") {
@@ -98,7 +134,24 @@ export function codexUsageFromRollouts(texts: string[]): CodexUsage | undefined 
             typeof p.forked_from_id === "string";
           if (typeof p.subagent_history_start_ordinal === "number")
             historyStart = p.subagent_history_start_ordinal;
+          const m = str(p.model);
+          if (m) threadModel.set(p.id, m);
         }
+        continue;
+      }
+      if (e.type === "turn_context") {
+        const m = str(p.model) ?? str(p.collaboration_mode?.settings?.model);
+        if (!m) continue;
+        fileModel = m;
+        if (!replayed) ownModel = m;
+        const turn = str(p.turn_id);
+        if (turn) turnModel.set(turn, m);
+        continue;
+      }
+      if (p.type === "thread_settings_applied") {
+        const m = str(p.thread_settings?.model);
+        const id = str(p.thread_id) ?? own;
+        if (m && id) threadModel.set(id, m);
         continue;
       }
       if (e.type === "token_usage_record" && p.usage) {
@@ -110,27 +163,29 @@ export function codexUsageFromRollouts(texts: string[]): CodexUsage | undefined 
             : `t:${id}|${p.turn_id}|${e.timestamp}|${e.ordinal}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        add(thread(id), p.usage);
+        thread(id);
+        pending.push({ id, turnId: str(p.turn_id), model: str(p.model), fileModel, usage: p.usage });
         continue;
       }
-      if (
-        p.type === "token_count" &&
-        p.info?.total_token_usage &&
-        !(
-          historyStart !== undefined &&
-          typeof e.ordinal === "number" &&
-          e.ordinal < historyStart
-        )
-      )
+      if (p.type === "token_count" && p.info?.total_token_usage && !replayed)
         total = p.info.total_token_usage;
     }
-    if (own) fallbacks.push({ id: own, total });
+    if (own) fallbacks.push({ id: own, total, model: ownModel });
   }
+  for (const r of pending)
+    add(
+      thread(r.id),
+      r.usage,
+      r.model ??
+        (r.turnId ? turnModel.get(r.turnId) : undefined) ??
+        threadModel.get(r.id) ??
+        r.fileModel,
+    );
   // Rollouts without per-response records: use the thread's own final running total.
-  for (const { id, total } of fallbacks) {
+  for (const { id, total, model } of fallbacks) {
     const t = thread(id);
     if (t.responses || !total) continue;
-    add(t, total);
+    add(t, total, threadModel.get(id) ?? model);
   }
   const list = [...threads.values()].filter((t) => t.responses > 0);
   if (!list.length) return undefined;
@@ -146,6 +201,7 @@ export function codexUsageFromRollouts(texts: string[]): CodexUsage | undefined 
         a.threadId.localeCompare(b.threadId),
     ),
     subagentThreads: list.filter((t) => t.subagent).length,
+    usageByModel: byModel,
   };
 }
 

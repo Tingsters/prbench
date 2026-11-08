@@ -53,7 +53,20 @@ export function claudeJudgeFlags(): string[] {
  * hooks or tools. Without one it keeps the legacy `claude[:model]` contract
  * (the user's own login) so cached judgments stay valid.
  */
-export function claudeJudge(model = 'opus', timeoutMs = 15 * 60_000, effort?: ClaudeEffort): JudgeProvider {
+/**
+ * Per-call judge timeout: PRBENCH_JUDGE_TIMEOUT_MS (set by `compare
+ * --judge-timeout-ms`), default 15 minutes. A hung-process guard only, not part
+ * of any judge identity, so it can be raised for a resumed run under load.
+ */
+export function judgeTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.PRBENCH_JUDGE_TIMEOUT_MS;
+  if (raw === undefined || raw === '') return 15 * 60_000;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`PRBENCH_JUDGE_TIMEOUT_MS must be a positive integer of milliseconds, not "${raw}".`);
+  return n;
+}
+
+export function claudeJudge(model = 'opus', timeoutMs = judgeTimeoutMs(), effort?: ClaudeEffort): JudgeProvider {
   return {
     id: `claude:${model}${effort ? `@${effort}` : ''}`,
     family: 'anthropic',
@@ -101,7 +114,7 @@ export function claudeJudge(model = 'opus', timeoutMs = 15 * 60_000, effort?: Cl
   };
 }
 
-export function codexJudge(model?: string, timeoutMs = 15 * 60_000, effort?: ReasoningEffort): JudgeProvider {
+export function codexJudge(model?: string, timeoutMs = judgeTimeoutMs(), effort?: ReasoningEffort): JudgeProvider {
   return {
     id: `codex:${model ?? 'default'}${effort ? `@${effort}` : ''}`,
     family: 'openai',

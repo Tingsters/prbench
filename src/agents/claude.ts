@@ -141,6 +141,28 @@ export type ClaudeRunResult = AgentRunResult & {
   toolCalls?: number;
 };
 
+/**
+ * Per-model usage and USD from a stream-json `result` event's `modelUsage`.
+ * `total_cost_usd` already sums every model the session used, subagents on
+ * other models included; this keeps the split. Input tokens include cache
+ * reads and writes, as in the totals.
+ */
+export function claudeUsageByModel(modelUsage: unknown): Pick<AgentRunResult, 'usageByModel'> {
+  if (!modelUsage || typeof modelUsage !== 'object') return {};
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+  const out: NonNullable<AgentRunResult['usageByModel']> = {};
+  for (const [model, u] of Object.entries(modelUsage as Record<string, any>)) {
+    if (!u || typeof u !== 'object') continue;
+    out[model] = {
+      inputTokens: n(u.inputTokens) + n(u.cacheReadInputTokens) + n(u.cacheCreationInputTokens),
+      cachedInputTokens: n(u.cacheReadInputTokens),
+      outputTokens: n(u.outputTokens),
+      ...(typeof u.costUSD === 'number' && u.costUSD >= 0 ? { costUsd: u.costUSD } : {}),
+    };
+  }
+  return Object.keys(out).length ? { usageByModel: out } : {};
+}
+
 function parseResult(stdout: string): Partial<ClaudeRunResult> {
   // stream-json prints one event per line; the last `result` event is the outcome.
   const lines = stdout.trim().split('\n').reverse();
@@ -160,6 +182,7 @@ function parseResult(stdout: string): Partial<ClaudeRunResult> {
         ...(typeof u.cache_read_input_tokens === 'number' ? { cachedInputTokens: u.cache_read_input_tokens } : {}),
         outputTokens: typeof u.output_tokens === 'number' ? u.output_tokens : undefined,
         numTurns: typeof j.num_turns === 'number' ? j.num_turns : undefined,
+        ...claudeUsageByModel(j.modelUsage),
       };
     } catch {
       // not JSON; keep looking

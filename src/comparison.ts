@@ -694,16 +694,34 @@ export function rebuildComparison(
   return summary;
 }
 
+/**
+ * Default writer timeout for a new experiment: PRBENCH_WRITER_TIMEOUT_MS, else
+ * 30 minutes. `--timeout-ms` takes precedence. The value is part of the
+ * experiment identity and writer cache keys, so choose it before freezing.
+ */
+export function writerTimeoutMs(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const raw = env.PRBENCH_WRITER_TIMEOUT_MS;
+  if (raw === undefined || raw === "") return 30 * 60_000;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0)
+    throw new Error(
+      `PRBENCH_WRITER_TIMEOUT_MS must be a positive integer of milliseconds, not "${raw}".`,
+    );
+  return n;
+}
+
 export async function compareV2(opts: CompareOptions) {
   if (opts.recoverLock && !opts.resume)
     throw new Error("Lock recovery requires --resume.");
   const root = resolve(opts.out),
     harness = resolve(import.meta.dir, ".."),
-    preflightCache = join(
-      harness,
-      "node_modules",
-      ".cache",
-      "prbench-preflight",
+    // Shared by every controller on this harness checkout (mirrors are
+    // created atomically; see preflight.ts). PRBENCH_PREFLIGHT_CACHE moves it.
+    preflightCache = resolve(
+      process.env.PRBENCH_PREFLIGHT_CACHE ||
+        join(harness, "node_modules", ".cache", "prbench-preflight"),
     );
   const old = existsSync(join(root, "manifest.json"))
     ? read<ComparisonManifest>(join(root, "manifest.json"))
@@ -842,7 +860,9 @@ export async function compareV2(opts: CompareOptions) {
         : { systems: SYSTEMS }),
       judges: JUDGES,
       effort: provider.effort,
-      timeoutMs: opts.timeoutMs ?? 30 * 60_000,
+      // Frozen in the identity and writer keys: a resume keeps the recorded value.
+      timeoutMs:
+        opts.timeoutMs ?? old?.settings.timeoutMs ?? writerTimeoutMs(),
       rubricVersion: RUBRIC_VERSION,
       replicates,
       purpose,

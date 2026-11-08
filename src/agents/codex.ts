@@ -156,6 +156,9 @@ export function withThreadUsage(
     outputTokens: usage.outputTokens,
     usageScope: "all-threads",
     subagentThreads: usage.subagentThreads,
+    ...(Object.keys(usage.usageByModel).length
+      ? { usageByModel: usage.usageByModel }
+      : {}),
   };
 }
 

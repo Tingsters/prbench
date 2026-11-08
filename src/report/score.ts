@@ -102,6 +102,47 @@ export function estimateCost(
   );
 }
 
+type Tokens = { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number };
+
+/**
+ * USD for a run whose threads may have used several models: each model's
+ * tokens at its own price, and any tokens not attributed to a model at the
+ * arm's model. Without a per-model split, everything is priced at the arm's
+ * model (single-model runs, and runs saved before the split was recorded).
+ * Undefined when a model that used tokens has no price.
+ */
+export function estimateCostByModel(
+  armModel: string,
+  t: Tokens,
+  byModel: Record<string, Tokens> | undefined,
+  table: Record<string, Price> = PRICE_TABLE.models,
+): number | undefined {
+  const entries = Object.entries(byModel ?? {});
+  if (!entries.length) return estimateCost(armModel, t, table);
+  if (t.inputTokens === undefined) return undefined;
+  let usd = 0;
+  const attributed = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+  for (const [model, u] of entries) {
+    const c = estimateCost(model, u, table);
+    if (c === undefined) return undefined;
+    usd += c;
+    attributed.inputTokens += u.inputTokens ?? 0;
+    attributed.cachedInputTokens += Math.min(u.cachedInputTokens ?? 0, u.inputTokens ?? 0);
+    attributed.outputTokens += u.outputTokens ?? 0;
+  }
+  const rest = {
+    inputTokens: Math.max(0, t.inputTokens - attributed.inputTokens),
+    cachedInputTokens: Math.max(0, (t.cachedInputTokens ?? 0) - attributed.cachedInputTokens),
+    outputTokens: Math.max(0, (t.outputTokens ?? 0) - attributed.outputTokens),
+  };
+  if (rest.inputTokens > 0 || rest.outputTokens > 0) {
+    const c = estimateCost(armModel, rest, table);
+    if (c === undefined) return undefined;
+    usd += c;
+  }
+  return usd;
+}
+
 export interface DraftScore extends Components {
   model: string;
   replicate: number;
@@ -124,6 +165,8 @@ export interface DraftScore extends Components {
   /** Where all-thread usage came from: the artifact itself or its saved writer traces. */
   usageSource?: "artifact" | "traces";
   subagentThreads?: number;
+  /** Models the writer's tokens were attributed to, when known (more than one for mixed-model writers). */
+  models?: string[];
   graphQueries?: number;
   /** Share of this draft's judgments that found at least one factual error. */
   errorRate: number;
@@ -272,7 +315,7 @@ export function collectDraftScores(
     const artifact = a.artifactDir && join(a.artifactDir, `${a.key.system}.json`);
     if (artifact && existsSync(artifact)) {
       const meta = JSON.parse(readFileSync(artifact, "utf8")).meta ?? {};
-      let tokens: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number } = meta;
+      let tokens: Tokens & { usageByModel?: Record<string, Tokens> } = meta;
       if (meta.agent === "codex" && typeof meta.costUsd !== "number") {
         if (meta.usageScope === "all-threads") {
           d.usageScope = "all-threads";
@@ -292,11 +335,13 @@ export function collectDraftScores(
       d.cachedInputTokens = tokens.cachedInputTokens;
       d.outputTokens = tokens.outputTokens;
       d.graphQueries = meta.operationCounts?.["graph.queries"];
+      const models = Object.keys(tokens.usageByModel ?? {}).sort();
+      if (models.length) d.models = models;
       if (typeof meta.costUsd === "number") {
         d.costUsd = meta.costUsd;
         d.costSource = "reported";
       } else {
-        const est = estimateCost(String(meta.model ?? a.key.model), tokens);
+        const est = estimateCostByModel(String(meta.model ?? a.key.model), tokens, tokens.usageByModel);
         if (est !== undefined) {
           d.costUsd = est;
           d.costSource = "estimated";
@@ -383,6 +428,9 @@ export interface ArmScore {
   costCovers?: string;
   /** Mean subagent threads per draft, where known. */
   subagentThreads?: number;
+  /** Models the arm's drafts used, and how many drafts used more than one. */
+  models?: string[];
+  mixedModelDrafts?: number;
 }
 
 /** Which threads a set of drafts' costs cover, for the report. */
@@ -437,6 +485,12 @@ export function armScores(drafts: DraftScore[]): ArmScore[] {
       graphQueries: queries.length ? mean(queries) : undefined,
       costCovers: costCovers(ds),
       subagentThreads: subs.length ? mean(subs) : undefined,
+      ...(ds.some((d) => d.models)
+        ? {
+            models: [...new Set(ds.flatMap((d) => d.models ?? []))].sort(),
+            mixedModelDrafts: ds.filter((d) => (d.models?.length ?? 0) > 1).length,
+          }
+        : {}),
     };
   });
 }
@@ -741,6 +795,18 @@ export function scoreMarkdown(drafts: DraftScore[], title = "Scores", failures: 
       `| ${a.model} | ${a.system} | ${a.composite.drafts} | ${f(a.composite.mean, 1)} [${f(a.composite.ci[0], 1)}, ${f(a.composite.ci[1], 1)}] | ${f(c.claims)} | ${f(c.context)} | ${f(c.uncertainties)} | ${f(c.rubric)} | ${f(c.factualErrors)} | ${f(c.unsupportedClaims)} | ${f(c.traps)} | ${a.costUsd === undefined ? "–" : `${f(a.costUsd, 3)}${a.costSource === "estimated" ? "*" : ""}`} | ${a.costCovers ?? "–"} | ${f(a.subagentThreads, 1)} | ${a.inputTokens === undefined ? "–" : Math.round(a.inputTokens)} | ${f(a.graphQueries, 1)} |`,
     );
   }
+  const mixed = armScores(drafts)
+    .filter((a) => a.mixedModelDrafts)
+    .sort((x, y) => (x.model + x.system).localeCompare(y.model + y.system));
+  if (mixed.length)
+    lines.push(
+      "",
+      "Mixed-model writers (subagent threads on another model; each model's tokens are priced at its own rate, and Claude's reported cost already covers every model):",
+      "",
+      "| Model | System | Mixed-model drafts | Models used |",
+      "|---|---|---:|---|",
+      ...mixed.map((a) => `| ${a.model} | ${a.system} | ${a.mixedModelDrafts}/${a.composite.drafts} | ${a.models!.join(", ")} |`),
+    );
   const deltas = pairedDeltas(drafts);
   if (deltas.length) {
     lines.push(

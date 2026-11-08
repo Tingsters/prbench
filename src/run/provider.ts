@@ -111,7 +111,19 @@ export function isShellVolatile(key: string): boolean {
   );
 }
 
+/**
+ * Harness controls that never reach a writer (sandbox.ts drops them): the
+ * timeouts are recorded in the manifest where they matter, so setting them in
+ * the environment must not change the writer environment identity.
+ */
+export const HARNESS_CONTROL_ENV = [
+  "PRBENCH_JUDGE_TIMEOUT_MS",
+  "PRBENCH_WRITER_TIMEOUT_MS",
+  "PRBENCH_PREFLIGHT_CACHE",
+];
+
 const CODEX_HASH_EXCLUDED = [
+  ...HARNESS_CONTROL_ENV,
   "CODEX_HOME",
   ...HOME_KEYS,
   "FAKE_CODEX_JUDGMENT",
@@ -163,6 +175,7 @@ function claudeComparableEnv(
       const k = key.toUpperCase();
       return (
         !HOME_KEYS.includes(k) &&
+        !HARNESS_CONTROL_ENV.includes(k) &&
         !k.startsWith("ANTHROPIC_") &&
         !k.startsWith("CLAUDE_CODE_") &&
         // Never passed to writers (sandbox.ts drops them): shell and session bookkeeping.

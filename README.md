@@ -51,6 +51,32 @@ concurrent forced refreshes); Windows keeps the exclusive copy mode. Claude runs
 use a long-lived setup token and need no coordination. After a failure no new
 job starts, running jobs finish and are saved, and `--resume` continues.
 
+#### Several controllers at once and timeouts
+
+Several `compare` processes may run at the same time (for example two Codex and
+two Claude controllers, each `--parallel 12`, with `--out results/r10/<run>/<provider>`),
+as long as each has its own `--out`. Each holds its own `controller.lock`,
+ledger and attempts under `--out`; sandboxes and judge scratch folders are
+unique `mkdtemp` folders under `TMPDIR`. The content-addressed stage cache
+(`<parent of --out>/.prbench-cache/v2`, or `--cache`) may be shared: entries are
+immutable and written with an atomic link. The case-bundle inspection mirrors in
+`node_modules/.cache/prbench-preflight` (`PRBENCH_PREFLIGHT_CACHE` moves them)
+are shared by every controller on the checkout; each mirror is cloned beside its
+final path and renamed into place. Every Codex controller links its sandboxes to
+the one dedicated login; a serial (`--parallel 1`) controller or standalone
+Codex judge that would otherwise use an exclusive copy joins the shared link
+whenever another live controller holds a lease, so it never writes a stale copy
+back. `tests/capacity.test.ts` runs four such controllers with fake agents.
+
+Timeouts under load:
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| `--timeout-ms <ms>` or `PRBENCH_WRITER_TIMEOUT_MS` | 30 min | Writer hung-job timeout. Part of the experiment identity and writer cache keys, so choose it when freezing; `--resume` keeps the recorded value. |
+| `--judge-timeout-ms <ms>` or `PRBENCH_JUDGE_TIMEOUT_MS` | 15 min | Per judge call. Not part of any identity, so it can be raised on `--resume`; timed-out judges are retried (up to 3 attempts). |
+
+These variables never reach writers and are left out of the writer environment identity.
+
 The command freezes skill/runtime bytes and case inputs, records harness and CLI
 identity, rotates system execution order, and serializes credential use. It
 compares candidate against baseline and native separately. `--prepare-only`

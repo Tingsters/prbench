@@ -196,7 +196,16 @@ program
     "--report-only",
     "rebuild a v2 report with no model calls; requires --resume",
   )
-  .option("--timeout-ms <ms>", "explicit per-process hung-job timeout", Number)
+  .option(
+    "--timeout-ms <ms>",
+    "writer hung-job timeout for a new experiment (default PRBENCH_WRITER_TIMEOUT_MS or 30 min); frozen in the experiment identity, so a resume keeps the recorded value",
+    Number,
+  )
+  .option(
+    "--judge-timeout-ms <ms>",
+    "per-call judge timeout (default PRBENCH_JUDGE_TIMEOUT_MS or 15 min); not part of any identity, so it may be raised on --resume",
+    Number,
+  )
   .option(
     "--provider <provider>",
     "codex (Codex writes and judges), claude (Claude Code writes and judges) or both (two independent runs in <out>/codex and <out>/claude)",
@@ -231,8 +240,17 @@ program
       opts: Omit<CompareOptions, "cases"> & {
         cases?: string;
         dataset?: string;
+        judgeTimeoutMs?: number;
       },
     ) => {
+      if (opts.judgeTimeoutMs !== undefined) {
+        if (!Number.isInteger(opts.judgeTimeoutMs) || opts.judgeTimeoutMs <= 0) {
+          console.error("--judge-timeout-ms must be a positive integer.");
+          process.exitCode = 2;
+          return;
+        }
+        process.env.PRBENCH_JUDGE_TIMEOUT_MS = String(opts.judgeTimeoutMs);
+      }
       if (opts.provider === "both" && opts.models?.length) {
         console.error(
           "--models names one provider's models; run --provider codex and --provider claude separately.",

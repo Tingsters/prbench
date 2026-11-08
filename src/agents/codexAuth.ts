@@ -199,18 +199,43 @@ function leaseFile(sourceDir: string): string {
   return join(sourceDir, `prbench-shared-${process.pid}.lease`);
 }
 
+/**
+ * Whether another live controller shares this login through symlinks. An
+ * exclusive copy written back over the file would then clobber a token that
+ * controller's runs rotated in place, so the copy mode joins the sharing.
+ */
+function otherSharedLease(sourceDir: string): boolean {
+  if (process.platform === "win32") return false;
+  try {
+    return readdirSync(sourceDir).some((name) => {
+      const m = /^prbench-shared-(\d+)\.lease$/.exec(name);
+      if (!m || Number(m[1]) === process.pid) return false;
+      try {
+        process.kill(Number(m[1]), 0);
+        return true;
+      } catch (e) {
+        return (e as NodeJS.ErrnoException).code === "EPERM";
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
 async function withSharedCodexAuth<T>(
   sourceDir: string,
   target: string,
   destination: string,
   fn: () => Promise<T>,
   onAcquired?: (waitMs: number) => void,
+  waitMs = 24 * 60 * 60_000,
 ): Promise<T> {
   const waiting = performance.now();
-  // The lock only orders link creation against `prbench auth codex`; the run
-  // itself holds a per-controller lease so a sign-in cannot replace the file
-  // underneath it.
-  const release = await acquire(join(sourceDir, "prbench.lock"), 60_000);
+  // The lock only orders link creation against `prbench auth codex` and any
+  // exclusive-copy run (another process's serial controller or standalone
+  // judge), which holds it for its whole run; the run itself holds a
+  // per-controller lease so a sign-in cannot replace the file underneath it.
+  const release = await acquire(join(sourceDir, "prbench.lock"), waitMs);
   try {
     writeFileSync(leaseFile(sourceDir), JSON.stringify({ pid: process.pid }), {
       mode: 0o600,
@@ -267,19 +292,32 @@ export async function withCodexAuth<T>(
     );
   if (canonical(destination) === canonical(sourceDir))
     throw new Error("The Codex run must have its own sandbox CODEX_HOME.");
-  if (sharedLogin)
+  if (sharedLogin || otherSharedLease(sourceDir))
     return withSharedCodexAuth(
       sourceDir,
       join(destination, "auth.json"),
       destination,
       fn,
       opts.onAcquired,
+      opts.waitMs,
     );
   const waiting = performance.now();
   const release = await acquire(
     join(sourceDir, "prbench.lock"),
     opts.waitMs ?? 24 * 60 * 60_000,
   );
+  // Leases are written under the lock, so this check cannot miss one.
+  if (otherSharedLease(sourceDir)) {
+    release();
+    return withSharedCodexAuth(
+      sourceDir,
+      join(destination, "auth.json"),
+      destination,
+      fn,
+      opts.onAcquired,
+      opts.waitMs,
+    );
+  }
   const target = join(destination, "auth.json");
   try {
     opts.onAcquired?.(performance.now() - waiting);

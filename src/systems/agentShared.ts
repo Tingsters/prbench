@@ -173,6 +173,9 @@ export function agentArtifact(opts: {
       ...(opts.run.subagentThreads !== undefined
         ? { subagentThreads: opts.run.subagentThreads }
         : {}),
+      ...(opts.run.usageByModel && Object.keys(opts.run.usageByModel).length
+        ? { usageByModel: opts.run.usageByModel }
+        : {}),
       ...(notes.length ? { notes } : {}),
     },
   };
