@@ -9,7 +9,7 @@
  * every judgment of it (all judges, both orders, every pairing).
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { codexUsageFromDir, type CodexUsage } from "../agents/codexUsage.ts";
 import type { SideJudgment } from "../judge/rubric.ts";
 import type { Facts } from "../schema/case.ts";
@@ -642,7 +642,81 @@ export function collectWriterFailures(root: string): WriterFailures[] {
   return [...out.values()].sort((a, b) => (a.model + a.system).localeCompare(b.model + b.system));
 }
 
-export function scoreMarkdown(drafts: DraftScore[], title = "Scores", failures: WriterFailures[] = []): string {
+/** Failed judge attempts for one judge, from `<judgment>.json.attempts/<key>/<NNN>.result.json`. */
+export interface JudgeFailures {
+  judge: string;
+  timeout: number;
+  transient: number;
+  format: number;
+  other: number;
+}
+
+/**
+ * Failed judge attempts per judge under a run root (or a folder of run
+ * roots). Timed-out and transient calls are retried (up to 3 attempts per
+ * order judgment) and a malformed reply gets one format repair; each failed
+ * attempt is counted here as a reliability measure. Results saved before
+ * they named their judge take the judge from a sibling judgment, else from
+ * the judge's folder name.
+ */
+export function collectJudgeFailures(root: string): JudgeFailures[] {
+  const out = new Map<string, JudgeFailures>();
+  const count = (judge: string, kind: string) => {
+    const row = out.get(judge) ?? { judge, timeout: 0, transient: 0, format: 0, other: 0 };
+    if (kind === "timeout") row.timeout++;
+    else if (kind === "transient") row.transient++;
+    else if (kind === "format") row.format++;
+    else row.other++;
+    out.set(judge, row);
+  };
+  const judgeOf = (dir: string): string | undefined => {
+    for (const n of readdirSync(dir))
+      if (n.endsWith(".json"))
+        try {
+          const j = JSON.parse(readFileSync(join(dir, n), "utf8")) as { judge?: unknown };
+          if (typeof j.judge === "string") return j.judge;
+        } catch {
+          /* Not a judgment. */
+        }
+    return undefined;
+  };
+  const attempts = (dir: string) => {
+    for (const key of readdirSync(dir)) {
+      if (!statSync(join(dir, key)).isDirectory()) continue;
+      for (const n of readdirSync(join(dir, key))) {
+        if (!n.endsWith(".result.json")) continue;
+        const r = JSON.parse(readFileSync(join(dir, key, n), "utf8")) as {
+          failureKind?: string;
+          problems?: unknown[];
+          judge?: string;
+        };
+        const kind = r.failureKind ?? (r.problems?.length ? "format" : undefined);
+        if (!kind) continue;
+        const parent = dirname(dir);
+        count(r.judge ?? judgeOf(parent) ?? basename(parent), kind);
+      }
+    }
+  };
+  const visit = (dir: string, depth: number) => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      const path = join(dir, n);
+      if (!statSync(path).isDirectory()) continue;
+      if (n.endsWith(".json.attempts")) attempts(path);
+      else if (depth > 0 && !["attempts", "inputs", "derived-reports", "artifacts", "writer"].includes(n)) visit(path, depth - 1);
+    }
+  };
+  visit(root, 12);
+  return [...out.values()].sort((a, b) => a.judge.localeCompare(b.judge));
+}
+
+export function scoreMarkdown(drafts: DraftScore[], title = "Scores", failures: WriterFailures[] = [],
+  judgeFailures: JudgeFailures[] = [],): string {
   const w = WEIGHTS;
   const lines = [
     `## ${title}`,
@@ -685,6 +759,15 @@ export function scoreMarkdown(drafts: DraftScore[], title = "Scores", failures: 
       ...failures.map((f) => `| ${f.model} | ${f.system} | ${accepted(f)} | ${f.noDraft} | ${f.scope} | ${f.timeout} | ${f.other} |`),
     );
   }
+  if (judgeFailures.length)
+    lines.push(
+      "",
+      "Judge reliability (timed-out and transient calls are retried, up to 3 attempts per order judgment; a malformed reply gets one format repair):",
+      "",
+      "| Judge | Failed attempts | Timed out | Transient | Format | Other |",
+      "|---|---:|---:|---:|---:|---:|",
+      ...judgeFailures.map((f) => `| ${f.judge} | ${f.timeout + f.transient + f.format + f.other} | ${f.timeout} | ${f.transient} | ${f.format} | ${f.other} |`),
+    );
   if (drafts.length) lines.push("", accuracyMarkdown(drafts).trimEnd());
   if (drafts.some((d) => d.costSource === "estimated"))
     lines.push("", `\\* Estimated from token counts and src/report/prices.json (${PRICE_TABLE_NOTE}).`);

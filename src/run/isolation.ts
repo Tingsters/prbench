@@ -265,8 +265,22 @@ export async function verifyComparisonIsolation(options: {
       saved.experiment !== options.experiment ||
       proof.experiment !== options.experiment ||
       proof.digest !== digest(text) ||
-      JSON.stringify(saved.probes.map((p: any) => `${p.model}/${p.system}`)) !==
-        JSON.stringify(expectedKeys) ||
+      !Array.isArray(saved.probes) ||
+      saved.probes.length !== expectedKeys.length ||
+      !saved.probes.every((p: any, i: number) => {
+        // Probes record the full arm spec (`model@effort`). Proofs saved
+        // before that recorded only the bare model, which never equals an
+        // arm with an effort, so they match on the bare model; the
+        // experiment id already binds the exact arm list.
+        const arm = options.models[Math.floor(i / options.variants.length)]!,
+          system = options.variants[i % options.variants.length]!.system;
+        return (
+          p.system === system &&
+          (p.arm !== undefined
+            ? p.arm === arm
+            : p.model === arm || p.model === parseArm(arm).model)
+        );
+      }) ||
       !saved.probes.every((p: any) => p.passed)
     )
       throw new Error('Saved isolation proof does not match this experiment.');
@@ -285,11 +299,13 @@ export async function verifyComparisonIsolation(options: {
       const sandbox = createSandbox(loadCase(options.probeCase));
       const owner = ownSandbox(sandbox.root);
       try {
-        return agent === 'claude'
-          ? // The probe checks the arm's skill setup, not the writer: run it at the
-            // configured effort, since low-effort models misreport the path.
-            await probeClaude(sandbox, parseArm(model).model, variant, options.effort)
-          : await probeCodex(sandbox, parseArm(model).model, variant, options.effort);
+        const result =
+          agent === 'claude'
+            ? // The probe checks the arm's skill setup, not the writer: run it at the
+              // configured effort, since low-effort models misreport the path.
+              await probeClaude(sandbox, parseArm(model).model, variant, options.effort)
+            : await probeCodex(sandbox, parseArm(model).model, variant, options.effort);
+        return { arm: model, ...result };
       } catch (error) {
         if (!failed) {
           failed = true;

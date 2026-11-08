@@ -6,6 +6,7 @@ import { failureKind } from "../src/run/ledger.ts";
 import {
   caseClustered,
   collectDraftScores,
+  collectJudgeFailures,
   collectWriterFailures,
   accuracyMarkdown,
   errorClass,
@@ -155,6 +156,25 @@ test("a writer that leaves no draft is its own retryable kind, counted per arm",
     { model: "luna@low", system: "tracetoon-baseline", noDraft: 2, scope: 1, timeout: 1, other: 1 },
   ]);
   expect(scoreMarkdown([], "S", collectWriterFailures(root))).toContain("| luna@low | tracetoon-baseline | 0 | 2 | 1 | 1 | 1 |");
+});
+
+test("judge failures are counted per judge in the reliability section", () => {
+  const root = tempDir();
+  const dir = join(root, "claude", "replicate-003", "m@medium", "tracetoon-baseline", "judgments", "v6", "pr5", "claude_x_medium");
+  const attempt = (order: string, n: string, v: unknown) => {
+    mkdirSync(join(dir, `x__y__${order}.json.attempts`, "k"), { recursive: true });
+    writeFileSync(join(dir, `x__y__${order}.json.attempts`, "k", `${n}.result.json`), JSON.stringify(v));
+  };
+  attempt("ab", "001", { problems: ["bad ref"], text: "{}" });
+  attempt("ab", "002", { problems: [], text: "{}" }); // accepted repair: not a failure
+  writeFileSync(join(dir, "x__y__ab.json"), JSON.stringify({ judge: "claude:x@medium" }));
+  attempt("ba", "001", { error: "claude judge timed out after 900000 ms", failureKind: "timeout" }); // legacy: no judge field
+  attempt("ba", "002", { error: "503", failureKind: "transient", judge: "claude:x@medium" });
+  expect(collectJudgeFailures(root)).toEqual([{ judge: "claude:x@medium", timeout: 1, transient: 1, format: 1, other: 0 }]);
+  const md = scoreMarkdown([], "S", [], collectJudgeFailures(root));
+  expect(md).toContain("Judge reliability");
+  expect(md).toContain("| claude:x@medium | 3 | 1 | 1 | 1 | 0 |");
+  expect(scoreMarkdown([], "S")).not.toContain("Judge reliability");
 });
 
 test("accuracy view: error rate, error classes, and candidate against any baseline arm", () => {

@@ -343,6 +343,59 @@ describe("claude isolation probe", () => {
     expect(calls().length).toBe(count);
   });
 
+  test("a saved proof for effort arms is accepted on resume", async () => {
+    const root = tempDir();
+    const arms = (models: string[]) =>
+      verifyComparisonIsolation({
+        root,
+        experiment: "exp-claude-arms",
+        probeCase: EXAMPLE,
+        models,
+        variants: variants().slice(1),
+        agent: "claude",
+        effort: "medium",
+      });
+    await arms(["claude-sonnet-5-5@medium"]);
+    const file = join(root, "isolation.json"),
+      saved = JSON.parse(readFileSync(file, "utf8"));
+    expect(saved.probes.map((p: any) => [p.arm, p.model])).toEqual([
+      ["claude-sonnet-5-5@medium", "claude-sonnet-5-5"],
+      ["claude-sonnet-5-5@medium", "claude-sonnet-5-5"],
+    ]);
+    // Resuming the same arms reuses the proof without calling the model.
+    const count = calls().length;
+    await arms(["claude-sonnet-5-5@medium"]);
+    // A proof saved before probes recorded the arm (bare model only) is
+    // still accepted for the same experiment.
+    const legacy =
+      JSON.stringify(
+        {
+          ...saved,
+          probes: saved.probes.map(({ arm: _, ...p }: any) => p),
+        },
+        null,
+        2,
+      ) + "\n";
+    writeFileSync(file, legacy);
+    writeFileSync(
+      join(root, "isolation.receipt.json"),
+      JSON.stringify({
+        experiment: "exp-claude-arms",
+        digest: new Bun.CryptoHasher("sha256").update(legacy).digest("hex"),
+      }),
+    );
+    await arms(["claude-sonnet-5-5@medium"]);
+    expect(calls().length).toBe(count);
+    // Different arms, or a tampered proof, are still refused.
+    await expect(arms(["claude-opus-5-5@medium"])).rejects.toThrow(
+      /does not match/,
+    );
+    writeFileSync(file, legacy.replace("tracetoon-candidate", "claude-native"));
+    await expect(arms(["claude-sonnet-5-5@medium"])).rejects.toThrow(
+      /does not match/,
+    );
+  });
+
   for (const [name, vars, message] of [
     [
       "a leaked plugin copy",

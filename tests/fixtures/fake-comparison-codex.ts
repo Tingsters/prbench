@@ -93,6 +93,18 @@ if (
     ]),
   );
 }
+// Once per marker file: the first judge call times out, as a slow Claude
+// judge did after 15 minutes. The harness must retry it, not stop the run.
+const judgeTimeoutOnce = process.env.FAKE_CODEX_JUDGE_TIMEOUT_ONCE;
+if (
+  process.argv.includes("-o") &&
+  judgeTimeoutOnce &&
+  !(await Bun.file(judgeTimeoutOnce).exists())
+) {
+  await Bun.write(judgeTimeoutOnce, "used");
+  console.error("simulated judge timed out; retry-after: 0");
+  process.exit(1);
+}
 process.env.FAKE_CODEX_MODE = process.argv.includes("-o")
   ? "nothing"
   : "native";

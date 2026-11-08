@@ -361,3 +361,43 @@ test("a run without native completes, scores, and records its systems for resume
     restore();
   }
 }, 240_000);
+
+test("a judge call that times out is retried and counted, not fatal", async () => {
+  const { cases, skill, candidate, restore } = await fakeComparisonSetup();
+  const marker = join(tempDir(), "judge-timeout-once");
+  process.env.FAKE_CODEX_JUDGE_TIMEOUT_ONCE = marker;
+  const opts = {
+    baselineSkill: skill,
+    candidateSkill: candidate,
+    cases: cases.root,
+    split: "dev",
+    out: join(tempDir(), "experiment"),
+    purpose: "diagnostic",
+    replicates: 1,
+    systems: ["baseline", "candidate"],
+  };
+  try {
+    await compare(opts);
+    expect(readFileSync(marker, "utf8")).toBe("used");
+    const summary = JSON.parse(readFileSync(join(opts.out, "summary.json"), "utf8"));
+    expect(summary.coverage).toMatchObject({ orders: 8, expectedOrders: 8, complete: true });
+    // The timed-out attempt is kept beside the judgment that succeeded on retry.
+    const results = Bun.spawnSync(["find", opts.out, "-path", "*judgments*", "-name", "*.result.json"])
+      .stdout.toString().trim().split("\n").filter(Boolean)
+      .map((f) => ({ f, r: JSON.parse(readFileSync(f, "utf8")) }));
+    const failed = results.filter(({ r }) => r.failureKind);
+    expect(failed.map(({ r }) => r.failureKind)).toEqual(["timeout"]);
+    expect(failed[0]!.f).toEndWith("001.result.json");
+    expect(results.some(({ f }) => f.startsWith(failed[0]!.f.replace("001.result.json", "002")))).toBe(true);
+    const events = readFileSync(join(opts.out, "events.jsonl"), "utf8")
+      .trim().split("\n").map((l) => JSON.parse(l))
+      .filter((e) => e.stage === "judge" && e.kind === "failed");
+    expect(events.map((e) => [e.attempt, e.failureKind])).toEqual([[1, "timeout"]]);
+    const md = readFileSync(join(opts.out, "summary.md"), "utf8");
+    expect(md).toContain("Judge reliability");
+    expect(md).toMatch(/\| codex:\S+ \| 1 \| 1 \| 0 \| 0 \| 0 \|/);
+  } finally {
+    delete process.env.FAKE_CODEX_JUDGE_TIMEOUT_ONCE;
+    restore();
+  }
+}, 240_000);

@@ -1,6 +1,6 @@
 /** Frozen, stage-addressed experiments. Quality failure is a result, not a retry. */
 import { artifactMatchesArm, checkArms } from "./run/arm.ts";
-import { collectDraftScores, collectWriterFailures, scoreMarkdown } from "./report/score.ts";
+import { collectDraftScores, collectJudgeFailures, collectWriterFailures, scoreMarkdown } from "./report/score.ts";
 import {
   cpSync,
   existsSync,
@@ -644,7 +644,7 @@ export function rebuildComparison(
     "",
     ...summary.limitations.map((x) => `- ${x}`),
     "",
-    scoreMarkdown(summary.scores, "Scores", collectWriterFailures(root)),
+    scoreMarkdown(summary.scores, "Scores", collectWriterFailures(root), collectJudgeFailures(root)),
     ...reports.map(
       (r) =>
         `## ${r.model}, replicate ${r.replicate}: ${r.comparison}\n\n${reportMarkdown(r.report)}`,

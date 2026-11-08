@@ -116,6 +116,7 @@ export function codexJudge(model?: string, timeoutMs = 15 * 60_000, effort?: Rea
         cmd.push('-');
         const ask = async (env?: Record<string, string | undefined>) => {
           const r = await runAgentProcess(cmd, { prompt, cwd: dir, timeoutMs, env, terminalEvent: effort ? codexTerminalEvent : undefined });
+          if (r.timedOut) throw new Error(`codex judge timed out after ${timeoutMs} ms`);
           if (r.exitCode !== 0) throw new Error(`codex judge failed (${r.exitCode}): ${(r.stderr || r.stdout).slice(-800)}`);
           const parsed = effort ? parseCodexResult(r.stdout) : undefined;
           if (parsed?.isError) throw new Error(`codex judge reported a failed turn: ${parsed.result?.slice(-800) ?? 'no detail'}`);
