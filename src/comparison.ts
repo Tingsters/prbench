@@ -1,6 +1,13 @@
 /** Frozen, stage-addressed experiments. Quality failure is a result, not a retry. */
 import { artifactMatchesArm, checkArms } from "./run/arm.ts";
-import { collectDraftScores, collectJudgeFailures, collectWriterFailures, scoreMarkdown } from "./report/score.ts";
+import {
+  collectDraftScores,
+  collectJudgeFailures,
+  collectWriterFailures,
+  scoreMarkdown,
+  writerTracesDir,
+} from "./report/score.ts";
+import { rescoredValidation, verifiedCheckouts } from "./rescoreValidation.ts";
 import {
   cpSync,
   existsSync,
@@ -222,7 +229,10 @@ function verifyFrozen(root: string, manifest: ComparisonManifest) {
  * resume from the same shell), so their identity and writer keys hold.
  */
 export function writerEnvironmentHash(
-  provider: Pick<ComparisonProvider, "environmentHash" | "legacyEnvironmentHash">,
+  provider: Pick<
+    ComparisonProvider,
+    "environmentHash" | "legacyEnvironmentHash"
+  >,
   ...frozen: (ComparisonManifest | undefined)[]
 ): string {
   const current = provider.environmentHash();
@@ -347,135 +357,148 @@ export function rebuildComparison(
     reports: ComparisonReport[] = [],
     allPairs: { model: string; replicate: number; pair: PairResult }[] = [];
   const missingOrderEvidence: string[] = [];
-  for (
-    let replicate = 1;
-    replicate <= manifest.settings.replicates;
-    replicate++
-  )
-    for (const model of MODELS) {
-      const base = modelRoot(root, replicate, model);
-      for (const l of loaded)
-        for (const system of SYSTEMS) {
-          const file = join(base, "artifacts", l.case.id, `${system}.json`);
-          if (!existsSync(file)) continue;
-          const artifact = read<PRArtifact>(file),
-            receipt = read(file.replace(/\.json$/, ".receipt.json"));
-          assertScope(artifact, file, manifest.id);
-          if (
-            checkArtifact(artifact).length ||
-            artifact.system !== system ||
-            artifact.case !== l.case.id ||
-            !artifactMatchesArm(artifact.meta, model) ||
-            receipt.key !==
-              writerKey(
-                manifest,
-                profile,
-                manifest.cases.find((c) => c.id === l.case.id)!,
-                model,
-                system,
-                replicate,
-              ) ||
-            receipt.digest !== artifactDigest(artifact) ||
-            receipt.experiment !== manifest.id
-          )
-            throw new Error("Saved artifact identity is invalid.");
-          allArtifacts.set(
-            `${replicate}/${model}/${l.case.id}/${system}`,
-            artifact,
-          );
-          const status = existsSync(file.replace(/\.json$/, ".status.json"))
-            ? read(file.replace(/\.json$/, ".status.json"))
-            : {};
-          metrics.push({
-            ...artifact.meta,
-            ...performanceEvidence(artifact),
-            model,
-            case: l.case.id,
-            system,
-            replicate,
-            cleanup: status.cleanup?.state ?? "unknown",
-            validationCommands: artifact.validation?.commands.length ?? 0,
-            commandsWithKnownDirectory:
-              artifact.validation?.commands.filter(
-                (c) => !c.cwd.startsWith("unknown"),
-              ).length ?? 0,
-            commandsWithKnownRevision:
-              artifact.validation?.commands.filter((c) => c.before && c.after)
-                .length ?? 0,
-          });
-        }
-      for (const comparison of COMPARISONS) {
-        const pairFile = join(base, comparison, "pairs.json");
-        if (!existsSync(pairFile)) continue;
-        const pairs = read<PairResult[]>(pairFile),
-          artifacts = new Map<string, Map<string, PRArtifact>>();
-        const pairIds = pairs.map((pair) => `${pair.case}/${pair.judge}`);
-        if (
-          new Set(pairIds).size !== pairs.length ||
-          pairs.some(
-            (pair) =>
-              pair.x !== comparison ||
-              pair.y !== "tracetoon-candidate" ||
-              !JUDGES.includes(pair.judge) ||
-              !loaded.some((l) => l.case.id === pair.case),
-          )
-        )
-          throw new Error(
-            "Pair results contain duplicate or unexpected samples.",
-          );
-        for (const pair of pairs)
-          for (const order of ["ab", "ba"] as const) {
-            const file = judgmentPath(
-              join(base, comparison, "judgments"),
-              pair.case,
-              pair.judge,
-              pair.x,
-              pair.y,
-              order,
+  const checkouts = verifiedCheckouts();
+  try {
+    for (
+      let replicate = 1;
+      replicate <= manifest.settings.replicates;
+      replicate++
+    )
+      for (const model of MODELS) {
+        const base = modelRoot(root, replicate, model);
+        for (const l of loaded)
+          for (const system of SYSTEMS) {
+            const file = join(base, "artifacts", l.case.id, `${system}.json`);
+            if (!existsSync(file)) continue;
+            const artifact = read<PRArtifact>(file),
+              receipt = read(file.replace(/\.json$/, ".receipt.json"));
+            assertScope(artifact, file, manifest.id);
+            if (
+              checkArtifact(artifact).length ||
+              artifact.system !== system ||
+              artifact.case !== l.case.id ||
+              !artifactMatchesArm(artifact.meta, model) ||
+              receipt.key !==
+                writerKey(
+                  manifest,
+                  profile,
+                  manifest.cases.find((c) => c.id === l.case.id)!,
+                  model,
+                  system,
+                  replicate,
+                ) ||
+              receipt.digest !== artifactDigest(artifact) ||
+              receipt.experiment !== manifest.id
+            )
+              throw new Error("Saved artifact identity is invalid.");
+            allArtifacts.set(
+              `${replicate}/${model}/${l.case.id}/${system}`,
+              artifact,
             );
-            if (!existsSync(file) || !pair.orderDigests?.[order])
-              missingOrderEvidence.push(
-                `${replicate}/${model}/${pair.case}/${pair.judge}/${comparison}/${order}`,
+            const status = existsSync(file.replace(/\.json$/, ".status.json"))
+              ? read(file.replace(/\.json$/, ".status.json"))
+              : {};
+            // Directories the runtime recorded, recovered from retained traces.
+            const validation = rescoredValidation(
+              artifact,
+              writerTracesDir(root, file),
+              (tree) =>
+                l.case.repo.bundle
+                  ? checkouts.get(join(l.dir, l.case.repo.bundle), tree)
+                  : undefined,
+            );
+            metrics.push({
+              ...artifact.meta,
+              ...performanceEvidence(artifact, validation),
+              model,
+              case: l.case.id,
+              system,
+              replicate,
+              cleanup: status.cleanup?.state ?? "unknown",
+              validationCommands: validation?.commands.length ?? 0,
+              commandsWithKnownDirectory:
+                validation?.commands.filter((c) => !c.cwd.startsWith("unknown"))
+                  .length ?? 0,
+              commandsWithKnownRevision:
+                validation?.commands.filter((c) => c.before && c.after)
+                  .length ?? 0,
+            });
+          }
+        for (const comparison of COMPARISONS) {
+          const pairFile = join(base, comparison, "pairs.json");
+          if (!existsSync(pairFile)) continue;
+          const pairs = read<PairResult[]>(pairFile),
+            artifacts = new Map<string, Map<string, PRArtifact>>();
+          const pairIds = pairs.map((pair) => `${pair.case}/${pair.judge}`);
+          if (
+            new Set(pairIds).size !== pairs.length ||
+            pairs.some(
+              (pair) =>
+                pair.x !== comparison ||
+                pair.y !== "tracetoon-candidate" ||
+                !JUDGES.includes(pair.judge) ||
+                !loaded.some((l) => l.case.id === pair.case),
+            )
+          )
+            throw new Error(
+              "Pair results contain duplicate or unexpected samples.",
+            );
+          for (const pair of pairs)
+            for (const order of ["ab", "ba"] as const) {
+              const file = judgmentPath(
+                join(base, comparison, "judgments"),
+                pair.case,
+                pair.judge,
+                pair.x,
+                pair.y,
+                order,
               );
-            else if (digest(readFileSync(file)) !== pair.orderDigests[order])
-              throw new Error(
-                "Order judgment bytes changed after pair acceptance.",
+              if (!existsSync(file) || !pair.orderDigests?.[order])
+                missingOrderEvidence.push(
+                  `${replicate}/${model}/${pair.case}/${pair.judge}/${comparison}/${order}`,
+                );
+              else if (digest(readFileSync(file)) !== pair.orderDigests[order])
+                throw new Error(
+                  "Order judgment bytes changed after pair acceptance.",
+                );
+            }
+          const facts = new Map(loaded.map((l) => [l.case.id, loadFacts(l)!])),
+            splitOf = new Map(loaded.map((l) => [l.case.id, l.case.split]));
+          for (const l of loaded) {
+            const a = allArtifacts.get(
+                `${replicate}/${model}/${l.case.id}/${comparison}`,
+              ),
+              b = allArtifacts.get(
+                `${replicate}/${model}/${l.case.id}/tracetoon-candidate`,
+              );
+            if (a && b)
+              artifacts.set(
+                l.case.id,
+                new Map([
+                  [comparison, a],
+                  ["tracetoon-candidate", b],
+                ]),
               );
           }
-        const facts = new Map(loaded.map((l) => [l.case.id, loadFacts(l)!])),
-          splitOf = new Map(loaded.map((l) => [l.case.id, l.case.split]));
-        for (const l of loaded) {
-          const a = allArtifacts.get(
-              `${replicate}/${model}/${l.case.id}/${comparison}`,
-            ),
-            b = allArtifacts.get(
-              `${replicate}/${model}/${l.case.id}/tracetoon-candidate`,
-            );
-          if (a && b)
-            artifacts.set(
-              l.case.id,
-              new Map([
-                [comparison, a],
-                ["tracetoon-candidate", b],
-              ]),
-            );
+          const report = buildReport({
+            results: pairs,
+            judges: JUDGES,
+            artifacts,
+            facts,
+            splitOf,
+          });
+          atomicJson(join(base, comparison, "report.json"), report);
+          writeFileSync(
+            join(base, comparison, "report.md"),
+            reportMarkdown(report),
+          );
+          reports.push({ model, replicate, comparison, report });
+          allPairs.push(...pairs.map((pair) => ({ model, replicate, pair })));
         }
-        const report = buildReport({
-          results: pairs,
-          judges: JUDGES,
-          artifacts,
-          facts,
-          splitOf,
-        });
-        atomicJson(join(base, comparison, "report.json"), report);
-        writeFileSync(
-          join(base, comparison, "report.md"),
-          reportMarkdown(report),
-        );
-        reports.push({ model, replicate, comparison, report });
-        allPairs.push(...pairs.map((pair) => ({ model, replicate, pair })));
       }
-    }
+  } finally {
+    checkouts.dispose();
+  }
   const expectedWriters =
     loaded.length *
     MODELS.length *
@@ -644,7 +667,12 @@ export function rebuildComparison(
     "",
     ...summary.limitations.map((x) => `- ${x}`),
     "",
-    scoreMarkdown(summary.scores, "Scores", collectWriterFailures(root), collectJudgeFailures(root)),
+    scoreMarkdown(
+      summary.scores,
+      "Scores",
+      collectWriterFailures(root),
+      collectJudgeFailures(root),
+    ),
     ...reports.map(
       (r) =>
         `## ${r.model}, replicate ${r.replicate}: ${r.comparison}\n\n${reportMarkdown(r.report)}`,
@@ -707,9 +735,9 @@ export async function compareV2(opts: CompareOptions) {
     );
   // A resume without --systems keeps the systems the experiment was frozen with.
   const SYSTEMS =
-    opts.systems?.length || !old
-      ? selectSystems(provider, opts.systems)
-      : manifestSystems(old.settings, provider),
+      opts.systems?.length || !old
+        ? selectSystems(provider, opts.systems)
+        : manifestSystems(old.settings, provider),
     COMPARISONS = judgedAgainst(SYSTEMS, provider);
   checkArms(MODELS, provider.id === "claude" ? "claude" : "codex");
   const parallel = Number(opts.parallel ?? 4);
@@ -809,7 +837,9 @@ export async function compareV2(opts: CompareOptions) {
       ...(provider.id === "codex" ? {} : { provider: provider.id }),
       models: MODELS,
       // Omitted for all three systems so earlier experiments keep their identity.
-      ...(SYSTEMS.length === provider.systems.length ? {} : { systems: SYSTEMS }),
+      ...(SYSTEMS.length === provider.systems.length
+        ? {}
+        : { systems: SYSTEMS }),
       judges: JUDGES,
       effort: provider.effort,
       timeoutMs: opts.timeoutMs ?? 30 * 60_000,

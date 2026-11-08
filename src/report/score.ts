@@ -311,13 +311,12 @@ export function collectDraftScores(
 }
 
 /**
- * All-thread Codex usage for a saved artifact, recomputed from the writer
- * traces of its accepted attempt: `<run>/attempts/writer/<key>/<NNN>/<case>/<system>.traces/`,
- * where the key comes from the artifact's receipt and the accepted attempt is
- * the latest one without a failure record. Lets runs saved before subagent
- * usage was counted be re-scored without new calls.
+ * The retained writer traces of a saved artifact's accepted attempt:
+ * `<run>/attempts/writer/<key>/<NNN>/<case>/<system>.traces/`, where the key
+ * comes from the artifact's receipt and the accepted attempt is the latest one
+ * without a failure record.
  */
-export function writerTraceUsage(root: string, artifactFile: string): CodexUsage | undefined {
+export function writerTracesDir(root: string, artifactFile: string): string | undefined {
   const receiptFile = artifactFile.replace(/\.json$/, ".receipt.json");
   if (!existsSync(receiptFile)) return undefined;
   let key: unknown;
@@ -341,11 +340,21 @@ export function writerTraceUsage(root: string, artifactFile: string): CodexUsage
     for (const n of attempts) {
       if (existsSync(join(keyDir, n, "failure.json"))) continue;
       const traces = join(keyDir, n, caseId, `${system}.traces`);
-      if (existsSync(traces)) return codexUsageFromDir(traces);
+      if (existsSync(traces)) return traces;
     }
     return undefined;
   }
   return undefined;
+}
+
+/**
+ * All-thread Codex usage for a saved artifact, recomputed from the writer
+ * traces of its accepted attempt (see `writerTracesDir`). Lets runs saved
+ * before subagent usage was counted be re-scored without new calls.
+ */
+export function writerTraceUsage(root: string, artifactFile: string): CodexUsage | undefined {
+  const traces = writerTracesDir(root, artifactFile);
+  return traces ? codexUsageFromDir(traces) : undefined;
 }
 
 /** Mean of per-case means, with a bootstrap interval over cases (cases are the independent unit). */

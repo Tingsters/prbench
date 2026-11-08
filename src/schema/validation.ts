@@ -14,7 +14,10 @@ export interface CommandEvidence {
   source: string;
   command: string;
   cwd: string;
-  cwdSource?: "recorded-tool-arguments" | "recorded-turn-context";
+  cwdSource?:
+    | "recorded-tool-arguments"
+    | "recorded-turn-context"
+    | "recorded-command-execution";
   startedAt?: string;
   completedAt?: string;
   exitCode?: number;
@@ -101,6 +104,7 @@ export function checkValidation(value: unknown): Problems {
         c.oneOf(x.cwdSource, `${p}.cwdSource`, [
           "recorded-tool-arguments",
           "recorded-turn-context",
+          "recorded-command-execution",
         ]);
       for (const k of ["startedAt", "completedAt"]) {
         if (
