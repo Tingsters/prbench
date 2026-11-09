@@ -166,7 +166,7 @@ export interface ComparisonManifest {
     harnessSnapshotHash?: string;
   };
 }
-const modelRoot = (root: string, replicate: number, model: string) =>
+export const modelRoot = (root: string, replicate: number, model: string) =>
   replicate === 1
     ? join(root, model)
     : join(root, `replicate-${String(replicate).padStart(3, "0")}`, model);

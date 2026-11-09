@@ -26,6 +26,7 @@ import { RUBRIC_VERSION } from "./judge/rubric.ts";
 import { auditEvidence } from "./audit.ts";
 import { version } from "../package.json";
 import { compare, type CompareOptions } from "./compare.ts";
+import { crossJudge } from "./crossjudge.ts";
 import { cleanupExperiment } from "./run/cleanup.ts";
 import { experimentStatus } from "./run/status.ts";
 import { preflight } from "./run/preflight.ts";
@@ -266,6 +267,51 @@ program
         const inputs = await resolveDatasetInputs(opts);
         const result = await compare({ ...opts, ...inputs });
         if ("exitCode" in result) process.exitCode = result.exitCode;
+      } catch (error) {
+        console.error(String(error));
+        process.exitCode = 2;
+      }
+    },
+  );
+
+program
+  .command("crossjudge")
+  .description(
+    "Judge candidate drafts of one finished compare run against baseline drafts of another (e.g. different writer models), reusing their saved artifacts",
+  )
+  .requiredOption("--candidate <dir>", "run whose tracetoon-candidate drafts are judged")
+  .requiredOption("--baseline <dir>", "run whose tracetoon-baseline drafts are judged")
+  .requiredOption("--out <dir>", "output directory for judgments and the summary")
+  .option(
+    "--cache <dir>",
+    "content-addressed stage cache (default <parent of --out>/.prbench-cache/v2)",
+  )
+  .option("--plan", "verify inputs and print the planned judge calls without calling models")
+  .option("--parallel <n>", "concurrent judge pairs", Number, 4)
+  .action(
+    async (opts: {
+      candidate: string;
+      baseline: string;
+      out: string;
+      cache?: string;
+      plan?: boolean;
+      parallel: number;
+    }) => {
+      try {
+        if (!Number.isInteger(opts.parallel) || opts.parallel < 1)
+          throw new Error("--parallel must be a positive integer.");
+        if (!opts.plan && !claudeAuthStatus().ok)
+          throw new Error(
+            "No Claude login for benchmarks. Run `claude setup-token`, then `prbench auth claude` to store the token.",
+          );
+        const result = await crossJudge(opts);
+        if ("plan" in result) console.log(JSON.stringify(result.plan));
+        else {
+          const t = result.consensus;
+          console.log(
+            `consensus W/T/L ${t.wins}/${t.ties}/${t.losses}${t.inconclusive ? ` (+${t.inconclusive} inconclusive)` : ""}; judge cost $${result.judgeCostUsd.toFixed(2)}; ${join(resolve(opts.out), "summary.md")}`,
+          );
+        }
       } catch (error) {
         console.error(String(error));
         process.exitCode = 2;
