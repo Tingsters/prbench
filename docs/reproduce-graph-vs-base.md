@@ -277,7 +277,18 @@ width.
 
 ## Release confirmation run
 
-_To be filled in with the final numbers from the release confirmation run:
-Tracetoon commit, CLI versions, per-provider composites with intervals,
-consensus W–L, factual errors, writer cost, and the paired-delta result
-against the reference run._
+Tracetoon `bd55f75` (graph on Relate `aa0f79e`, Relate BM25 fulltext search links, shipped
+defaults left unmodified in SKILL.md). Harness prbench-score with this branch. Claude Code
+pinned to 2.1.319 (`PRBENCH_CLAUDE_COMMAND`), Codex CLI 0.164. Dataset real-cases@1.0.0, dev
+split, 5 cases × 5 replicates, `--parallel 10`.
+
+| Provider | Graph vs base composite | Δ [95% CI] | Consensus W–L | Factual errors (graph / base) | Writer cost per draft (graph / base) |
+|---|---|---|---|---|---|
+| Claude, Sonnet 5.5 + Haiku reviewers | 78.9 vs 73.7 | +5.2 [2.5, 8.0] | 18–1 | 0.08 / 0.09 | $0.407 / $0.690 |
+| Codex, Terra 6.1 + Luna reviewers | 86.6 vs 83.2 | +3.5 [1.8, 5.1] | 12–1 | 0.00 / 0.07 | $0.207 / $0.320 |
+| Codex rerun (same build) | 87.5 vs 82.3 | +5.2 [2.9, 6.8] | 13–2 | 0.00 / 0.04 | $0.198 / $0.320 |
+
+Paired against the reference run (tracetoon `7483847`) with `scripts/paired-delta.ts`:
+Claude 4 better / 2 worse / 19 equal, Δ-of-Δ +3.2 [+1.2, +5.7]; Codex 5 / 8 / 12,
+Δ-of-Δ −1.3 [−2.2, −0.3], and the Codex rerun 6 / 8 / 11, +0.5 [−1.1, +1.8]. The two
+Codex runs differ by about 1.8 points, which is the run-to-run noise to expect at 25 pairs.
