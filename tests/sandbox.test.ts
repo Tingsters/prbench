@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadCase } from '../src/schema/case.ts';
-import { claudeProjectDir, createSandbox, msysPath, pathPairs, rewritePaths } from '../src/run/sandbox.ts';
+import { claudeProjectDir, createSandbox, GUI_LAUNCHERS, msysPath, pathPairs, rewritePaths } from '../src/run/sandbox.ts';
 import { exec, git } from '../src/util/exec.ts';
 import { cleanupTemps, copyExample, EXAMPLE, tempDir } from './helpers.ts';
 
@@ -191,6 +191,20 @@ describe('createSandbox', () => {
       const r = exec([powershell!, '-NoProfile', '-Command', '[ordered]@{home=$HOME; envHome=$env:HOME; userProfile=$env:USERPROFILE; tilde=(Convert-Path ~)} | ConvertTo-Json -Compress'], { cwd: sb.repo, env: sb.env });
       expect(r.code).toBe(0);
       expect(JSON.parse(r.stdout)).toEqual({ home: sb.home, envHome: sb.home, userProfile: sb.home, tilde: sb.home });
+    } finally {
+      sb.dispose();
+    }
+  });
+
+  test('editors and desktop openers are no-ops inside the sandbox', () => {
+    const sb = createSandbox(loaded, { parent: tempDir() });
+    try {
+      for (const name of GUI_LAUNCHERS) {
+        const cmd = process.platform === 'win32' ? ['cmd', '/d', '/c', name, '.'] : [name, '.'];
+        const r = exec(cmd, { cwd: sb.repo, env: sb.env });
+        expect(r.code).toBe(0);
+        expect(r.stderr).toContain(`prbench sandbox: ${name} not launched`);
+      }
     } finally {
       sb.dispose();
     }

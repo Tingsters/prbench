@@ -73,6 +73,9 @@ export interface SandboxOptions {
 
 const FAKE_GH = resolve(import.meta.dir, 'fake-gh.ts');
 
+/** GUI programs a writer's tools may launch; shimmed to no-ops inside sandboxes. */
+export const GUI_LAUNCHERS = ['code', 'code-insiders', 'codium', 'cursor', 'xdg-open', 'open', 'gio', 'kde-open', 'gnome-open'];
+
 /** Claude Code stores a project's sessions under its path with every non-alphanumeric character replaced by "-". */
 export function claudeProjectDir(path: string): string {
   return path.replace(/[^A-Za-z0-9]/g, '-');
@@ -188,6 +191,13 @@ function writeGhShims(bin: string): void {
     mode: 0o755,
   });
   writeFileSync(join(bin, 'gh.cmd'), `@"${bun}" "${FAKE_GH}" %*\r\n`);
+  // Editors and desktop openers detach from the writer and outlive the sandbox
+  // (a TUI's "open in editor" ran `code .` and left windows on the host). In a
+  // sandbox they open nothing and succeed.
+  for (const name of GUI_LAUNCHERS) {
+    writeFileSync(join(bin, name), `#!/bin/sh\necho "prbench sandbox: ${name} not launched" >&2\nexit 0\n`, { mode: 0o755 });
+    writeFileSync(join(bin, `${name}.cmd`), `@echo prbench sandbox: ${name} not launched 1>&2\r\n@exit /b 0\r\n`);
+  }
   if (process.platform === 'win32') {
     // Bun.which() resolves native executables before .cmd wrappers. A real
     // gh.exe here also covers tools that resolve gh before invoking it.
