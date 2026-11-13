@@ -131,7 +131,7 @@ with pairs digest
 
 The frozen candidate was rc.24 at source `872a37d`, build
 `dbdff58866721e9b52186d9ff1637a419d1212538c018244c3b6da8477699193`.
-CI run [41772612043](https://github.com/Tingsters/tracetoon/actions/runs/41772612043)
+CI run [41772612043](https://github.com/Tracetoon/tracetoon/actions/runs/41772612043)
 passed all three platform suites, reproducibility, portable ZIP checks and a
 separate rehearsal of the exact retained Windows bundle and executable.
 Artifact `13295193643` has ZIP digest

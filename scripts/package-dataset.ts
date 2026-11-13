@@ -51,7 +51,7 @@ const filename=`prbench-${id}-${version}.tar.gz`,target=join(out,filename);
 if(existsSync(target))throw new Error('Release artifact already exists; choose a new output directory.');
 await Bun.Archive.write(target,files,{compress:'gzip',level:9});
 const archive=readFileSync(target);
-const release:DatasetRelease={id,version,description:'Seven consented, redacted historical PR-writing replay cases',url:`https://github.com/Tingsters/prbench/releases/download/cases-v${version}/${filename}`,sha256:createHash('sha256').update(archive).digest('hex'),manifestSha256:createHash('sha256').update(files['dataset.json']!).digest('hex'),bytes:archive.length,cases};
+const release:DatasetRelease={id,version,description:'Seven consented, redacted historical PR-writing replay cases',url:`https://github.com/Tracetoon/prbench/releases/download/cases-v${version}/${filename}`,sha256:createHash('sha256').update(archive).digest('hex'),manifestSha256:createHash('sha256').update(files['dataset.json']!).digest('hex'),bytes:archive.length,cases};
 writeFileSync(join(out,'dataset-release.json'),JSON.stringify(release,null,2)+'\n');
 writeFileSync(join(out,'SHA256SUMS.txt'),release.sha256+'  '+filename+'\n');
 writeFileSync(join(out,'preflight-summary.json'),JSON.stringify({passed:true,cases:checked,modelCalls:0},null,2)+'\n');

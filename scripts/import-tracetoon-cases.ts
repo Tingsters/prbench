@@ -113,7 +113,7 @@ for (const c of CASES) {
 
     let original: Case['original'];
     if ('pr' in c) {
-      const r = exec(['gh', 'pr', 'view', String(c.pr), '--repo', 'Tingsters/tracetoon', '--json', 'title,body,url']);
+      const r = exec(['gh', 'pr', 'view', String(c.pr), '--repo', 'Tracetoon/tracetoon', '--json', 'title,body,url']);
       if (r.code !== 0) throw new Error(`gh pr view ${c.pr}: ${r.stderr.trim()}`);
       const pr = JSON.parse(r.stdout) as { title: string; body: string; url: string };
       writeFileSync(join(dir, 'original.md'), pr.body.replace(/\r\n/g, '\n'));
