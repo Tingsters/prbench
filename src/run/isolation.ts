@@ -204,7 +204,10 @@ export function normalizeClaudeReport(
     .trim()
     .replace(/^[`'"]+|[`'".]+$/g, '')
     .trim();
-  const expanded = text.replace(/^(?:~|\$HOME)(?=[\\/])/, home);
+  // join() rewrites the rest in the platform's separators, so `~/.claude/...` on
+  // Windows compares equal to the native path the catalogue reports.
+  const home_ = text.match(/^(?:~|\$HOME)(?=[\\/])/);
+  const expanded = home_ ? join(home, text.slice(home_[0].length)) : text;
   if (
     expected &&
     (expanded === 'tracetoon' || canonical(expanded) === canonical(expected))

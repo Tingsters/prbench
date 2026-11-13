@@ -153,11 +153,16 @@ test("parallel codex comparison overlaps runs and reaches the same result as ser
   await withEnv(env(serialSpans), () => compare(serial));
   await withEnv(env(parallelSpans), () => compare(parallel));
 
-  // Serial never overlaps; parallel does, within the limit.
+  // Serial never overlaps; parallel does, within the limit. Windows keeps the
+  // exclusive login copy (symlinks need extra privileges, see
+  // setCodexLoginSharing), so its Codex runs take the login one at a time.
   expect(peakOverlap(spans(serialSpans))).toBe(1);
   const p = spans(parallelSpans);
-  expect(peakOverlap(p)).toBeGreaterThanOrEqual(2);
-  expect(peakOverlap(p)).toBeLessThanOrEqual(3);
+  if (process.platform === "win32") expect(peakOverlap(p)).toBe(1);
+  else {
+    expect(peakOverlap(p)).toBeGreaterThanOrEqual(2);
+    expect(peakOverlap(p)).toBeLessThanOrEqual(3);
+  }
   // Judging starts before every writer has finished.
   const lastWriterEnd = Math.max(
     ...p.filter((s) => s.kind === "writer").map((s) => s.end),

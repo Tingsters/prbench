@@ -185,15 +185,20 @@ describe("claude comparison writers", () => {
     expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toBe(
       "# Pinned synthetic skill\n",
     );
-    expect(readFileSync(join(sandboxRoot!, "bin", "tracetoon"))).toEqual(
-      readFileSync(pinned.runtime),
+    // The pinned runtime is `tracetoon.exe` on Windows; settings.json holds its
+    // path JSON-escaped, so compare against the escaped form.
+    const runtime = join(
+      sandboxRoot!,
+      "bin",
+      `tracetoon${process.platform === "win32" ? ".exe" : ""}`,
     );
+    expect(readFileSync(runtime)).toEqual(readFileSync(pinned.runtime));
     expect(
       readFileSync(
         join(sandboxRoot!, "home", ".claude", "settings.json"),
         "utf8",
       ),
-    ).toContain(join(sandboxRoot!, "bin", "tracetoon"));
+    ).toContain(JSON.stringify(runtime).slice(1, -1));
     expect(call.tracetoonOff).toBeUndefined();
     expect(JSON.parse(readFileSync(call.tracetoonConfig, "utf8"))).toEqual({
       comic: "off",

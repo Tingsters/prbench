@@ -139,8 +139,11 @@ test("four concurrent compare controllers at --parallel 12 do not collide", asyn
     expect(JSON.parse(readFileSync(join(r.out, "state.json"), "utf8")).status).toBe("complete");
     expect(existsSync(join(r.out, "controller.lock"))).toBe(false);
   }
-  // Codex controllers really ran many jobs at once.
-  expect(peakOverlap(runs[0]!.log)).toBeGreaterThanOrEqual(6);
+  // Codex controllers really ran many jobs at once. Windows keeps the exclusive
+  // login copy (symlinks need extra privileges, see setCodexLoginSharing), so
+  // its Codex runs hold the login lock one at a time.
+  if (process.platform === "win32") expect(peakOverlap(runs[0]!.log)).toBe(1);
+  else expect(peakOverlap(runs[0]!.log)).toBeGreaterThanOrEqual(6);
   // One mirror, no stray temporary clones.
   expect(readdirSync(preflightCache).filter((n) => n.endsWith(".git"))).toHaveLength(1);
   expect(readdirSync(preflightCache).some((n) => n.endsWith(".tmp"))).toBe(false);

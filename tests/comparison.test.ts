@@ -1,17 +1,28 @@
 import { afterAll, expect, test } from "bun:test";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { compare } from "../src/compare.ts";
 import { RUBRIC_KEYS } from "../src/judge/rubric.ts";
 import { artifactDigest } from "../src/schema/artifact.ts";
 import { cleanupTemps, copyExample, tempDir } from "./helpers.ts";
 afterAll(cleanupTemps);
+
+/** Every file under `dir`, as full paths. A portable stand-in for `find`, which is a different tool on Windows. */
+const filesUnder = (dir: string): string[] =>
+  existsSync(dir)
+    ? (readdirSync(dir, { recursive: true }) as string[])
+        .map((f) => join(dir, f))
+        .filter((f) => statSync(f).isFile())
+    : [];
 
 async function fakeComparisonSetup() {
   const cases = copyExample("comparison-smoke");
@@ -100,8 +111,8 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
     expect(summary.writerMetrics.length).toBe(6);
     // The first writer typed a path outside its sandbox: that sample is
     // rejected and retried, and the run still completes.
-    const failures = Bun.spawnSync(["find", join(opts.out, "attempts", "writer"), "-name", "failure.json"])
-      .stdout.toString().trim().split("\n").filter(Boolean)
+    const failures = filesUnder(join(opts.out, "attempts", "writer"))
+      .filter((f) => basename(f) === "failure.json")
       .map((f) => JSON.parse(readFileSync(f, "utf8")));
     expect(failures.map((f: any) => f.failureKind)).toEqual(["scope"]);
     expect(readFileSync(join(opts.out, "summary.md"), "utf8")).toContain("Scope-rejected attempts");
@@ -382,8 +393,8 @@ test("a judge call that times out is retried and counted, not fatal", async () =
     const summary = JSON.parse(readFileSync(join(opts.out, "summary.json"), "utf8"));
     expect(summary.coverage).toMatchObject({ orders: 8, expectedOrders: 8, complete: true });
     // The timed-out attempt is kept beside the judgment that succeeded on retry.
-    const results = Bun.spawnSync(["find", opts.out, "-path", "*judgments*", "-name", "*.result.json"])
-      .stdout.toString().trim().split("\n").filter(Boolean)
+    const results = filesUnder(opts.out)
+      .filter((f) => f.includes("judgments") && f.endsWith(".result.json"))
       .map((f) => ({ f, r: JSON.parse(readFileSync(f, "utf8")) }));
     const failed = results.filter(({ r }) => r.failureKind);
     expect(failed.map(({ r }) => r.failureKind)).toEqual(["timeout"]);
