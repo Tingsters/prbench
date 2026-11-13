@@ -6,7 +6,7 @@
       "id": "real-cases",
       "version": "1.0.0",
       "description": "Seven consented, redacted historical PR-writing replay cases",
-      "url": "https://github.com/Tingsters/prbench/releases/download/cases-v1.0.0/prbench-real-cases-1.0.0.tar.gz",
+      "url": "https://github.com/Tracetoon/prbench/releases/download/cases-v1.0.0/prbench-real-cases-1.0.0.tar.gz",
       "sha256": "92538590e50910bc07858b423a00b1fb2d372351e520d1568958e32a68513c51",
       "manifestSha256": "120f3753ec701f25226c0c07ead3a9e5de8856ed54b4caf4b3a37896b797c7ac",
       "bytes": 22095009,

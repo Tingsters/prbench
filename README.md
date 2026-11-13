@@ -7,7 +7,7 @@ repository bundles, fact provenance and pinned setup dependencies. No original
 agent logs or checkout on the author's machine are needed.
 
 ```sh
-bun install --global https://github.com/Tingsters/prbench/releases/download/v0.3.0/prbench-0.3.0.tgz
+bun install --global https://github.com/Tracetoon/prbench/releases/download/v0.3.0/prbench-0.3.0.tgz
 prbench datasets list
 prbench datasets fetch real-cases@1.0.0
 prbench preflight --dataset real-cases@1.0.0
@@ -105,7 +105,7 @@ Needs [Bun](https://bun.sh) 1.3.14 or later and git.
 Install the released CLI globally with Bun:
 
 ```sh
-bun install --global https://github.com/Tingsters/prbench/releases/download/v0.3.0/prbench-0.3.0.tgz
+bun install --global https://github.com/Tracetoon/prbench/releases/download/v0.3.0/prbench-0.3.0.tgz
 prbench --version
 prbench --help
 ```

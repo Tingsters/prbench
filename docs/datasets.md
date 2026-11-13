@@ -7,7 +7,7 @@ prbench distributes curated replay data as separate, versioned GitHub release as
 Install the current CLI with Bun 1.3.14+ and Git:
 
 ```sh
-bun install --global https://github.com/Tingsters/prbench/releases/download/v0.3.0/prbench-0.3.0.tgz
+bun install --global https://github.com/Tracetoon/prbench/releases/download/v0.3.0/prbench-0.3.0.tgz
 prbench datasets list
 prbench datasets fetch real-cases@1.0.0
 prbench preflight --dataset real-cases@1.0.0

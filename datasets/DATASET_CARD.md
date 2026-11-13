@@ -50,6 +50,6 @@ Use for paired PR-writing tool comparisons on fixed evidence. Seven cases from o
 
 ## License, attribution and maintenance
 
-Dataset compilation, owner-contributed text and annotations are distributed under Apache-2.0; see LICENSE. Source repositories, dependencies and third-party quoted material retain their applicable upstream terms; see NOTICE.md and licenses in the Git histories. Attribute Tingsters/prbench and the source projects when redistributing. Do not replace assets for an existing version: corrections require a new dataset version and checksum. Report accidental disclosure through the repository's private vulnerability reporting mechanism when available, or privately to the owner; do not reproduce secrets in public issues.
+Dataset compilation, owner-contributed text and annotations are distributed under Apache-2.0; see LICENSE. Source repositories, dependencies and third-party quoted material retain their applicable upstream terms; see NOTICE.md and licenses in the Git histories. Attribute Tracetoon/prbench and the source projects when redistributing. Do not replace assets for an existing version: corrections require a new dataset version and checksum. Report accidental disclosure through the repository's private vulnerability reporting mechanism when available, or privately to the owner; do not reproduce secrets in public issues.
 
-The release is hosted at https://github.com/Tingsters/prbench/releases/tag/cases-v1.0.0. The harness and dataset have independent versions. MANIFEST.md and the release metadata identify the exact inputs.
+The release is hosted at https://github.com/Tracetoon/prbench/releases/tag/cases-v1.0.0. The harness and dataset have independent versions. MANIFEST.md and the release metadata identify the exact inputs.
