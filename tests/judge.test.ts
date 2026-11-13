@@ -6,7 +6,7 @@ import { FACTS_SCHEMA, loadCase, type Facts } from '../src/schema/case.ts';
 import { normalizeBody, wordCount } from '../src/judge/normalize.ts';
 import { combine, judgePair, judgmentPath, type StoredJudgment } from '../src/judge/pairwise.ts';
 import { extractJson, parseJudge, type JudgeProvider } from '../src/judge/providers.ts';
-import { buildPrompt, checkJudgment, JUDGMENT_SCHEMA, PREPARATION_NOTE, RUBRIC_KEYS, RUBRIC_VERSION, type Judgment, type SideJudgment } from '../src/judge/rubric.ts';
+import { buildPrompt, checkJudgment, judgmentSchema, JUDGMENT_SCHEMA, PREPARATION_NOTE, RUBRIC_KEYS, RUBRIC_VERSION, type Judgment, type SideJudgment } from '../src/judge/rubric.ts';
 import { sessionEvidence, sessionItems } from '../src/judge/evidence.ts';
 import { agreedResults, buildReport, reportMarkdown } from '../src/report.ts';
 import { bootstrapMeanCI, cohenKappa, signTest } from '../src/stats.ts';
@@ -522,4 +522,40 @@ describe('session evidence', () => {
     expect(p).toContain(PREPARATION_NOTE);
     expect(p).toContain('Absence never establishes fabrication and never proves a pass.');
   });
+});
+
+test('the per-prompt schema allows only the references each side may cite', () => {
+  const schema = judgmentSchema({
+    A: new Set(['C1', 'C2', 'X1', 'U1', 'T1', 'S1', 'A.V1']),
+    B: new Set(['C1', 'X1', 'U1', 'T1', 'S1', 'B.V1', 'B.V10']),
+  }) as any;
+  const a = schema.properties.A.properties, b = schema.properties.B.properties;
+  expect(a.claimsCovered.items.enum).toEqual(['C1', 'C2']);
+  expect(a.contextCovered.items.enum).toEqual(['X1']);
+  expect(a.uncertaintiesRespected.items.enum).toEqual(['U1']);
+  expect(a.trapsHit.items.enum).toEqual(['T1']);
+  // A cannot cite B's evidence (the reference a Claude judge invented), and vice versa.
+  const aRefs = a.claimAssessments.items.properties.evidenceRefs.items.enum;
+  expect(aRefs).toContain('A.V1');
+  expect(aRefs).not.toContain('B.V10');
+  expect(b.claimAssessments.items.properties.evidenceRefs.items.enum).toContain('B.V10');
+  // Everything else keeps the static schema, which stays the default.
+  expect(schema.required).toEqual(JUDGMENT_SCHEMA.required);
+  expect(judgmentSchema()).toBe(JUDGMENT_SCHEMA);
+});
+
+test('judgePair hands the judge the per-prompt reference schema', async () => {
+  const schemas: any[] = [];
+  const judge: JudgeProvider = {
+    id: 'fake:schema',
+    family: 'test',
+    async ask(_prompt, schema) {
+      schemas.push(schema);
+      const j: Judgment = { A: side({ claimsCovered: ['C1'] }), B: side({ claimsCovered: ['C1'] }), preferred: 'tie', preferenceDependsOnMissingEvidence: false, reason: 'same' };
+      return { text: JSON.stringify(j) };
+    },
+  };
+  await judgePair({ loaded: loadCase(EXAMPLE), facts, x: artifact('tracetoon', 'Falls back to world.'), y: artifact('claude-native', 'Falls back to world too.'), judge, outDir: tempDir() });
+  expect(schemas).toHaveLength(2);
+  for (const schema of schemas) expect(schema.properties.A.properties.claimsCovered.items.enum).toContain('C1');
 });

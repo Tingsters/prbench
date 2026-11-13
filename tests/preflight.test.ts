@@ -84,3 +84,25 @@ test('historical digests bind case revisions and hashes without becoming writer 
   expect(writerCaseIdentity(loaded)).toBe(identity);
   expect(()=>preflightCase(loaded,{cache:tempDir(),requireProvenance:true})).toThrow('identity mismatch');
 });
+test("concurrent controllers share one cold mirror cache without collisions", async () => {
+  const example = copyExample("preflight-race"),
+    cache = join(tempDir(), "preflight");
+  const at = Date.now() + 1500;
+  const script = `
+    import { preflightCase } from ${JSON.stringify(join(import.meta.dir, "..", "src", "run", "preflight.ts"))};
+    import { loadCase } from ${JSON.stringify(join(import.meta.dir, "..", "src", "schema", "case.ts"))};
+    const loaded = loadCase(process.argv[1]);
+    while (Date.now() < ${at}) {}
+    preflightCase(loaded, { cache: process.argv[2], requireProvenance: false });
+  `;
+  const procs = Array.from({ length: 8 }, () =>
+    Bun.spawn([process.execPath, "-e", script, example.dir, cache], { stdout: "pipe", stderr: "pipe" }),
+  );
+  const results = await Promise.all(procs.map(async (p) => ({ code: await p.exited, err: await new Response(p.stderr).text() })));
+  for (const r of results) {
+    if (r.code) console.error(r.err.slice(-1000));
+    expect(r.code).toBe(0);
+  }
+  const { readdirSync } = await import("node:fs");
+  expect(readdirSync(cache)).toHaveLength(1);
+}, 60_000);

@@ -18,6 +18,7 @@ import { extractJson, type JudgeProvider } from "./providers.ts";
 import {
   buildPrompt,
   checkJudgment,
+  judgmentSchema,
   RUBRIC_VERSION,
   type Judgment,
   type SideJudgment,
@@ -31,6 +32,7 @@ import {
   retryDelay,
 } from "../run/ledger.ts";
 import { redactEvidence } from "../agents/validation.ts";
+import { abortableSleep, cancellationSignal } from "../run/cancellation.ts";
 
 export interface JudgeControls {
   cache?: StageCache;
@@ -116,6 +118,13 @@ function evidenceFor(loaded: LoadedCase): string {
   }
   return e;
 }
+
+/**
+ * Judge failures worth another sample: a timed-out or transiently failing
+ * call says nothing about the drafts, so it is retried (up to 3 attempts in
+ * all, with backoff) instead of invalidating the run.
+ */
+const RETRYABLE: string[] = ["transient", "timeout"];
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const safe = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "_");
@@ -277,7 +286,9 @@ async function judgeOnce(
       }
       if (
         (previous.problems?.length && repairUsed) ||
-        (previous.failureKind && previous.failureKind !== "transient")
+        (previous.failureKind &&
+          previous.failureKind !== "format" &&
+          !RETRYABLE.includes(previous.failureKind))
       )
         throw new Error(
           `${judge.id} gave no usable judgment for ${meta.case}: persisted recovery limit reached. ${previous.error ?? previous.problems?.join("; ") ?? ""}`,
@@ -301,7 +312,7 @@ async function judgeOnce(
     const started = performance.now();
     let reply;
     try {
-      reply = await judge.ask(request);
+      reply = await judge.ask(request, judgmentSchema(refs));
     } catch (error) {
       lastError = redactEvidence(String(error));
       // Some CLI providers signal an empty structured reply as an exception.
@@ -314,6 +325,7 @@ async function judgeOnce(
           text: "",
           problems: [lastError],
           failureKind: "format",
+          judge: judge.id,
           durationMs: performance.now() - started,
         });
         event("failed", {
@@ -331,6 +343,7 @@ async function judgeOnce(
       atomicJson(`${prefix}.result.json`, {
         error: lastError,
         failureKind: kind,
+        judge: judge.id,
         durationMs: performance.now() - started,
       });
       event("failed", {
@@ -339,10 +352,16 @@ async function judgeOnce(
         detail: lastError,
         durationMs: performance.now() - started,
       });
-      if (kind !== "transient" || attempt === 3) break;
-      await Bun.sleep(
+      if (
+        !RETRYABLE.includes(kind) ||
+        attempt === 3 ||
+        cancellationSignal()?.aborted
+      )
+        break;
+      await abortableSleep(
         controls?.retryDelays?.[attempt - 1] ??
           retryDelay(error, attempt === 1 ? 10000 : 30000),
+        cancellationSignal(),
       );
       continue;
     }
@@ -359,6 +378,7 @@ async function judgeOnce(
       sourceSha256: sha(reply.text),
       at: new Date().toISOString(),
       problems,
+      judge: judge.id,
       durationMs: performance.now() - started,
       costUsd: reply.costUsd,
     });

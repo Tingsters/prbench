@@ -25,6 +25,23 @@ export interface ArtifactMeta {
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
+  /**
+   * What the token counts cover. "all-threads" includes every subagent thread
+   * the writer spawned; absent for Codex means the main thread only (runs saved
+   * before subagent usage was counted).
+   */
+  usageScope?: "main-thread" | "all-threads";
+  subagentThreads?: number;
+  /**
+   * Token usage per model (Codex threads on different models, Claude's
+   * `modelUsage`). Absent on single-model runs saved before it was recorded;
+   * then all tokens are priced at `model`. Tokens whose model is unknown are in
+   * the totals but in no entry.
+   */
+  usageByModel?: Record<
+    string,
+    { inputTokens: number; cachedInputTokens: number; outputTokens: number; costUsd?: number }
+  >;
   experimentId?: string;
   runtimeIdentity?: { version: string; buildId: string; sha256: string };
   stageTimings?: Record<string, number>;
@@ -135,6 +152,25 @@ export function checkArtifact(value: unknown): Problems {
     c.number(m.costUsd, "meta.costUsd", { optional: true, min: 0 });
     c.number(m.inputTokens, "meta.inputTokens", { optional: true, min: 0 });
     c.number(m.outputTokens, "meta.outputTokens", { optional: true, min: 0 });
+    if (
+      m.usageScope !== undefined &&
+      m.usageScope !== "main-thread" &&
+      m.usageScope !== "all-threads"
+    )
+      c.fail("meta.usageScope", 'expected "main-thread" or "all-threads"');
+    c.number(m.subagentThreads, "meta.subagentThreads", {
+      optional: true,
+      min: 0,
+    });
+    if (m.usageByModel !== undefined && c.object(m.usageByModel, "meta.usageByModel"))
+      for (const [model, u] of Object.entries(m.usageByModel as Record<string, unknown>)) {
+        const at = `meta.usageByModel.${model}`;
+        if (!c.object(u, at)) continue;
+        const v = u as Record<string, unknown>;
+        for (const k of ["inputTokens", "cachedInputTokens", "outputTokens"])
+          c.number(v[k], `${at}.${k}`, { min: 0 });
+        c.number(v.costUsd, `${at}.costUsd`, { optional: true, min: 0 });
+      }
     c.string(m.experimentId, "meta.experimentId", { optional: true });
     if (
       m.runtimeIdentity !== undefined &&

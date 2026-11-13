@@ -284,6 +284,183 @@ function outputFacts(raw: string): {
   };
 }
 
+/**
+ * A command the agent runtime itself recorded as executed, with the directory
+ * it ran in. Codex rollouts write one `event_msg`/`item_completed` record per
+ * `CommandExecution`, whatever tool or orchestration started it; the live
+ * `codex exec --json` stream omits the directory.
+ */
+export interface RecordedExecution {
+  id: string;
+  /** The program's argv when recorded as one, else the command text. */
+  argv?: string[];
+  command: string;
+  cwd: string;
+  start: number;
+  end: number;
+}
+
+/** A recorded directory, from a `file://` URL or a plain path. */
+function recordedDirectory(cwd: string): string {
+  if (!cwd.startsWith("file://")) return cwd;
+  let path = cwd.slice("file://".length);
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    /* Keep the literal spelling. */
+  }
+  if (path.startsWith("localhost/")) path = path.slice("localhost".length);
+  return /^\/[A-Za-z]:[\\/]/.test(path) ? path.slice(1) : path;
+}
+
+export function recordedExecution(j: any): RecordedExecution | undefined {
+  if (j?.type !== "event_msg" || j.payload?.type !== "item_completed") return;
+  const item = j.payload.item;
+  if (
+    !item ||
+    !/^(?:CommandExecution|commandExecution|command_execution)$/.test(
+      item.type,
+    ) ||
+    typeof item.id !== "string" ||
+    !item.id ||
+    typeof item.cwd !== "string" ||
+    !item.cwd
+  )
+    return;
+  const end = Date.parse(j.timestamp),
+    d = item.duration,
+    ms =
+      typeof d?.secs === "number"
+        ? d.secs * 1000 + (typeof d.nanos === "number" ? d.nanos / 1e6 : 0)
+        : typeof item.duration_ms === "number"
+          ? item.duration_ms
+          : undefined;
+  // Without a completion time and duration the record can't be placed in time.
+  if (!Number.isFinite(end) || ms === undefined || !(ms >= 0)) return;
+  const argv =
+    Array.isArray(item.command) &&
+    item.command.length &&
+    item.command.every((a: unknown) => typeof a === "string")
+      ? (item.command as string[])
+      : undefined;
+  const command = argv
+    ? argv.join(" ")
+    : typeof item.command === "string"
+      ? item.command
+      : undefined;
+  if (!command) return;
+  return {
+    id: item.id,
+    ...(argv ? { argv } : {}),
+    command,
+    cwd: recordedDirectory(item.cwd),
+    start: end - ms,
+    end,
+  };
+}
+
+/** Whether a displayed command is the one the runtime recorded. */
+function recordsCommand(display: string, r: RecordedExecution): boolean {
+  if (display === r.command || displaysCommand(display, r.command)) return true;
+  const argv = r.argv;
+  // `bash -lc X` / `pwsh -Command X`: the display quotes X for its shell.
+  return (
+    !!argv &&
+    argv.length === 3 &&
+    /^(?:-l?c|-Command)$/i.test(argv[1]!) &&
+    displaysCommand(display, argv[2]!)
+  );
+}
+
+/**
+ * Give commands of unknown directory the directory the runtime recorded for
+ * that exact command at that time. Every matching record must agree, and no
+ * more commands may match than there are records, so no directory is guessed.
+ * Returns the commands whose directory was filled.
+ */
+export function applyRecordedDirectories(
+  items: { raw: string; command: CommandEvidence }[],
+  records: Iterable<RecordedExecution>,
+  redact: (text: string) => string,
+): Set<CommandEvidence> {
+  const all = [...records],
+    filled = new Set<CommandEvidence>();
+  const matches = (item: (typeof items)[number], r: RecordedExecution) => {
+    const started = Date.parse(item.command.startedAt ?? "");
+    return (
+      Number.isFinite(started) &&
+      started >= r.start - 1000 &&
+      started <= r.end + 1000 &&
+      recordsCommand(item.raw, r)
+    );
+  };
+  for (const item of items) {
+    const c = item.command;
+    if (!c.cwd.startsWith("unknown")) continue;
+    const candidates = all.filter((r) => matches(item, r));
+    if (!candidates.length) continue;
+    const directories = new Set(candidates.map((r) => r.cwd));
+    const peers = new Set(
+      items
+        .filter((other) => candidates.some((r) => matches(other, r)))
+        .map((other) => other.command),
+    );
+    if (directories.size !== 1 || peers.size > candidates.length) continue;
+    c.cwd = redact([...directories][0]!);
+    c.cwdSource = "recorded-command-execution";
+    filled.add(c);
+  }
+  return filled;
+}
+
+const UNREPORTED_DIRECTORIES =
+  "Some execution working directories were not reported; only the writer root is known.";
+
+/**
+ * Saved evidence with the directories its runtime recorded, recovered from
+ * retained (already redacted) traces after the run. Only commands whose
+ * directory was unknown change; their check is normalized again. Never
+ * executes anything, and leaves `evidence` itself untouched.
+ */
+export function withRecordedDirectories(
+  evidence: ValidationEvidence,
+  traceLines: Iterable<string>,
+  repo?: string,
+): ValidationEvidence {
+  const records = new Map<string, RecordedExecution>();
+  for (const line of traceLines) {
+    if (!line.includes("item_completed")) continue;
+    try {
+      const r = recordedExecution(JSON.parse(line));
+      if (r && !records.has(r.id)) records.set(r.id, r);
+    } catch {
+      /* Not a runtime record. */
+    }
+  }
+  if (!records.size) return evidence;
+  const commands = evidence.commands.map((c) => ({ ...c }));
+  const filled = applyRecordedDirectories(
+    commands.map((command) => ({ raw: command.command, command })),
+    records.values(),
+    (s) => s,
+  );
+  if (!filled.size) return evidence;
+  for (const c of filled) {
+    const normalized = canonicalCheck(c.command, c.cwd, repo);
+    if (normalized) c.check = checkExecution(normalized, c.output);
+    else delete c.check;
+  }
+  const gaps = evidence.gaps.filter(
+    (g) =>
+      g !== UNREPORTED_DIRECTORIES ||
+      commands.some((c) => c.cwd.startsWith("unknown")),
+  );
+  gaps.push(
+    `Working directories of ${filled.size} command(s) were recovered after the run from retained runtime command records.`,
+  );
+  return { ...evidence, commands, gaps };
+}
+
 export class ValidationCapture {
   private commands = new Map<string, CommandEvidence>();
   private sessions = new Map<string, string>();
@@ -298,6 +475,7 @@ export class ValidationCapture {
   private streamThread?: string;
   private sourceThreads = new Map<string, string>();
   private turnDirectories = new Map<string, string>();
+  private recorded = new Map<string, RecordedExecution>();
   private pendingContexts = new Map<
     string,
     { start: number; contexts: ExecutionContext[] }
@@ -335,6 +513,14 @@ export class ValidationCapture {
     if (!j || typeof j !== "object" || Array.isArray(j)) {
       this.malformed++;
       return;
+    }
+    if (!live) {
+      const record = recordedExecution(j);
+      if (record) {
+        // Forked threads replay their parent's records under the same ID.
+        if (!this.recorded.has(record.id)) this.recorded.set(record.id, record);
+        return; // A directory record, never a second execution.
+      }
     }
     if (live && j.type === "thread.started" && typeof j.thread_id === "string")
       this.streamThread ??= j.thread_id;
@@ -518,6 +704,15 @@ export class ValidationCapture {
   finish(finalTree?: TreeObservation): ValidationEvidence {
     // Stream and persisted session formats may describe the same invocation.
     const unique = [...new Set(this.commands.values())];
+    // The runtime's own per-command directory record outranks static inference.
+    applyRecordedDirectories(
+      unique.map((command) => ({
+        raw: this.rawCommands.get(command) ?? command.command,
+        command,
+      })),
+      this.recorded.values(),
+      this.options.redact ?? redactEvidence,
+    );
     for (const c of unique)
       if (c.cwd.startsWith("unknown") && c.startedAt) {
         const started = Date.parse(c.startedAt);
@@ -601,9 +796,7 @@ export class ValidationCapture {
         "Some tested revisions are unknown: execution-time content observations are unavailable.",
       );
     if (commands.some((c) => c.cwd.startsWith("unknown")))
-      this.gaps.add(
-        "Some execution working directories were not reported; only the writer root is known.",
-      );
+      this.gaps.add(UNREPORTED_DIRECTORIES);
     if (!finalTree)
       this.gaps.add("Final worktree content could not be fingerprinted.");
     return {

@@ -7,9 +7,13 @@ export interface ValidationWork {
   validation?: ValidationEvidence;
   codeIdentity?: { base: string; head?: string; diffSha256: string };
 }
-export function performanceEvidence(artifact: PRArtifact): ValidationWork {
+/** `validation` replaces the artifact's own evidence, e.g. as re-scored from retained traces. */
+export function performanceEvidence(
+  artifact: PRArtifact,
+  validation: ValidationEvidence | undefined = artifact.validation,
+): ValidationWork {
   return {
-    validation: artifact.validation,
+    validation,
     codeIdentity: {
       base: artifact.base,
       head: artifact.head,

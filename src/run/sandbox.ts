@@ -73,6 +73,9 @@ export interface SandboxOptions {
 
 const FAKE_GH = resolve(import.meta.dir, 'fake-gh.ts');
 
+/** GUI programs a writer's tools may launch; shimmed to no-ops inside sandboxes. */
+export const GUI_LAUNCHERS = ['code', 'code-insiders', 'codium', 'cursor', 'xdg-open', 'open', 'gio', 'kde-open', 'gnome-open'];
+
 /** Claude Code stores a project's sessions under its path with every non-alphanumeric character replaced by "-". */
 export function claudeProjectDir(path: string): string {
   return path.replace(/[^A-Za-z0-9]/g, '-');
@@ -101,10 +104,15 @@ function fileUri(path: string): string | undefined {
 export function rewritePaths(jsonl: string, pairs: [from: string, to: string][]): string {
   const esc = (s: string) => JSON.stringify(s).slice(1, -1);
   const map = new Map<string, string>();
+  // A Windows path replayed on a POSIX host keeps its tail's backslashes
+  // (C:\repo\src\a.ts -> /sandbox/repo\src\a.ts), which no POSIX tool reads
+  // as a path inside the checkout; those tails get POSIX separators too.
+  const posixTail = new Set<string>();
   for (const [from, to] of pairs) {
     const fromUri = fileUri(from), toUri = fileUri(to);
     if (fromUri && toUri) map.set(esc(fromUri), esc(toUri));
     map.set(esc(from), esc(to));
+    if (/^(?:[A-Za-z]:)?\\/.test(from) && to.startsWith('/')) posixTail.add(esc(from));
     const fwd = from.replace(/\\/g, '/');
     if (fwd !== from) map.set(esc(fwd), esc(to.replace(/\\/g, '/')));
     const msys = msysPath(from);
@@ -115,8 +123,11 @@ export function rewritePaths(jsonl: string, pairs: [from: string, to: string][])
   // Whole paths only: not preceded by a path character, and followed by a
   // separator, a quote or the end, so "/work" doesn't match ".github/workflows".
   const alt = keys.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const re = new RegExp(`(?<![\\w.\\-~/\\\\])(?:${alt})(?=[\\\\/"'\`\\s]|$)`, 'g');
-  return jsonl.replace(re, (m) => map.get(m)!);
+  // The tail is JSON-escaped backslash + name segments, stopping at quotes,
+  // whitespace and further escapes, so a command's other arguments are kept.
+  const re = new RegExp(`(?<![\\w.\\-~/\\\\])(${alt})((?:\\\\\\\\[^"\\\\\\s]+)*)(?=[\\\\/"'\`\\s]|$)`, 'g');
+  return jsonl.replace(re, (_m, key: string, tail: string) =>
+    map.get(key)! + (posixTail.has(key) ? tail.replaceAll('\\\\', '/') : tail));
 }
 
 /** Where a case's repository was recorded, falling back to the first session's cwd. */
@@ -180,6 +191,13 @@ function writeGhShims(bin: string): void {
     mode: 0o755,
   });
   writeFileSync(join(bin, 'gh.cmd'), `@"${bun}" "${FAKE_GH}" %*\r\n`);
+  // Editors and desktop openers detach from the writer and outlive the sandbox
+  // (a TUI's "open in editor" ran `code .` and left windows on the host). In a
+  // sandbox they open nothing and succeed.
+  for (const name of GUI_LAUNCHERS) {
+    writeFileSync(join(bin, name), `#!/bin/sh\necho "prbench sandbox: ${name} not launched" >&2\nexit 0\n`, { mode: 0o755 });
+    writeFileSync(join(bin, `${name}.cmd`), `@echo prbench sandbox: ${name} not launched 1>&2\r\n@exit /b 0\r\n`);
+  }
   if (process.platform === 'win32') {
     // Bun.which() resolves native executables before .cmd wrappers. A real
     // gh.exe here also covers tools that resolve gh before invoking it.
@@ -199,7 +217,23 @@ function writeGhShims(bin: string): void {
   }
 }
 
+/**
+ * Per-login and per-process bookkeeping that differs between shells and says
+ * nothing about the writer's environment. Writers never see it, so a resumed
+ * experiment from another shell keeps its environment identity.
+ */
+export const VOLATILE_ENV = [
+  'INVOCATION_ID', 'JOURNAL_STREAM', 'SYSTEMD_EXEC_PID', 'MANAGERPID', 'MANAGERPIDFDID',
+  'MEMORY_PRESSURE_WATCH', 'MEMORY_PRESSURE_WRITE', 'WINDOWID', 'SHELL_SESSION_ID',
+  'XDG_SESSION_ID', 'XDG_VTNR', 'DBUS_SESSION_BUS_ADDRESS', 'SESSION_MANAGER',
+  'SSH_AUTH_SOCK', 'GPG_TTY', 'OLDPWD', 'SHLVL', '_',
+];
+export const VOLATILE_PREFIXES = ['KONSOLE_', 'CLAUDE_'];
+
 const DROPPED_ENV = [
+  'PRBENCH_JUDGE_TIMEOUT_MS',
+  'PRBENCH_WRITER_TIMEOUT_MS',
+  'PRBENCH_PREFLIGHT_CACHE',
   'GH_TOKEN',
   'GITHUB_TOKEN',
   'GH_ENTERPRISE_TOKEN',
@@ -211,7 +245,14 @@ const DROPPED_ENV = [
   'TRACETOON_ASSETS',
   'TRACETOON_LAUNCHER',
   'TRACETOON_ALLOW_DOWNLOAD',
+  // Claude Code reads these from the parent (a host session, its login or its
+  // settings); runs add back only the chosen credentials.
+  'CLAUDECODE',
+  'PRBENCH_CLAUDE_OAUTH_TOKEN',
 ];
+// CLAUDE_ covers the host session's CLAUDE_CODE_*, CLAUDE_PID and CLAUDE_EFFORT,
+// which would otherwise reach a writer's Claude Code.
+const DROPPED_PREFIXES = ['CODEX_', 'ANTHROPIC_', ...VOLATILE_PREFIXES];
 
 function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: string }, c: Case): Record<string, string> {
   const env: Record<string, string> = {};
@@ -219,7 +260,7 @@ function sandboxEnv(sb: { home: string; codexHome: string; bin: string; root: st
   // Windows env names are case-insensitive; drop every spelling of PATH first.
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
   const path = env[pathKey] ?? '';
-  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || k.toUpperCase().startsWith('CODEX_') || DROPPED_ENV.includes(k.toUpperCase())) delete env[k];
+  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH' || DROPPED_PREFIXES.some((p) => k.toUpperCase().startsWith(p)) || DROPPED_ENV.includes(k.toUpperCase()) || VOLATILE_ENV.includes(k.toUpperCase())) delete env[k];
   const appdata = join(sb.root, 'appdata');
   for (const d of ['roaming', 'local', 'config', 'data', 'state', 'cache']) mkdirSync(join(appdata, d), { recursive: true });
   Object.assign(env, {
@@ -253,7 +294,10 @@ export function createSandbox(loaded: LoadedCase, opts: SandboxOptions = {}): Sa
   // (C:\Users\ABCDEF~1), which agents and the rewritten logs would spell differently.
   const root = realpathSync.native(mkdtempSync(join(parent, `prbench-${c.id}-`)));
   const rec = recordedPath(c);
-  const repo = join(root, 'work', rec ? basename(rec.replace(/[\\/]+$/, '')) || 'repo' : 'repo');
+  // The recorded path's own syntax decides its last segment: a Windows path
+  // (C:\replay\tracetoon) replayed on Linux has no "/", and the host's
+  // basename would keep the backslashes as one directory name.
+  const repo = join(root, 'work', rec ? rec.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'repo' : 'repo');
   const remote = join(root, 'remote.git');
   const gitDir = join(root, 'git');
   const home = join(root, 'home');

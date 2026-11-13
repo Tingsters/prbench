@@ -1,4 +1,13 @@
 /** Frozen, stage-addressed experiments. Quality failure is a result, not a retry. */
+import { artifactMatchesArm, checkArms } from "./run/arm.ts";
+import {
+  collectDraftScores,
+  collectJudgeFailures,
+  collectWriterFailures,
+  scoreMarkdown,
+  writerTracesDir,
+} from "./report/score.ts";
+import { rescoredValidation, verifiedCheckouts } from "./rescoreValidation.ts";
 import {
   cpSync,
   existsSync,
@@ -45,10 +54,20 @@ import {
   type PRArtifact,
 } from "./schema/artifact.ts";
 import {
-  codexCommand,
-  codexRunEnv,
-  codexAuthHome,
+  releaseCodexLoginLease,
+  setCodexLoginSharing,
 } from "./agents/codexAuth.ts";
+import { claudeAuthStatus } from "./agents/claude.ts";
+import {
+  comparisonProvider,
+  judgedAgainst,
+  manifestProvider,
+  manifestSystems,
+  selectSystems,
+  skillInput,
+  type ComparisonProvider,
+} from "./run/provider.ts";
+import { runPool, type PoolJob } from "./run/pool.ts";
 import { PR_PROMPT } from "./systems/agentShared.ts";
 import { runComparisonWriter } from "./run/comparisonWriter.ts";
 import { assertWriterScope as assertScope } from "./run/scopeAudit.ts";
@@ -68,16 +87,19 @@ import { performanceReport, type WriterMetric } from "./performance.ts";
 import { performanceEvidence } from "./validationWork.ts";
 import { exec, git } from "./util/exec.ts";
 import { redactEvidence } from "./agents/validation.ts";
-import { setCancellationSignal } from "./run/cancellation.ts";
-import { commandIdentity, ownerIdentity, harnessRevision } from "./run/identity.ts";
-import { systemOrder, COMPARISON_SYSTEMS } from "./run/schedule.ts";
+import { abortableSleep, setCancellationSignal } from "./run/cancellation.ts";
+import {
+  commandIdentity,
+  ownerIdentity,
+  harnessRevision,
+} from "./run/identity.ts";
+import { systemOrder } from "./run/schedule.ts";
 import { controllerLock } from "./run/controller.ts";
 import {
   verifyValidationProof,
   type AdjudicationSource,
 } from "./run/adjudication.ts";
 
-const MODELS = ["gpt-6.1-sol", "gpt-6.1-terra"];
 export const COMPARISON_WRITER_ENTRIES = [
   "package.json",
   "bun.lock",
@@ -89,8 +111,6 @@ export const COMPARISON_WRITER_ENTRIES = [
   "src/run/fake-gh.ts",
   "src/run/schedule.ts",
 ];
-const JUDGES = MODELS.map((model) => `codex:${model}@medium`);
-const SYSTEMS = COMPARISON_SYSTEMS;
 const read = <T = any>(file: string): T =>
   JSON.parse(readFileSync(file, "utf8"));
 interface Input {
@@ -112,7 +132,11 @@ export interface ComparisonManifest {
   preparationHash: string;
   probeCaseHash: string;
   settings: {
+    /** Absent in manifests frozen before providers existed: those are Codex. */
+    provider?: string;
     models: string[];
+    /** Writer systems when not all of the provider's; absent means all three. */
+    systems?: string[];
     judges: string[];
     effort: string;
     timeoutMs: number;
@@ -142,7 +166,7 @@ export interface ComparisonManifest {
     harnessSnapshotHash?: string;
   };
 }
-const modelRoot = (root: string, replicate: number, model: string) =>
+export const modelRoot = (root: string, replicate: number, model: string) =>
   replicate === 1
     ? join(root, model)
     : join(root, `replicate-${String(replicate).padStart(3, "0")}`, model);
@@ -199,6 +223,24 @@ function verifyFrozen(root: string, manifest: ComparisonManifest) {
   );
   return profile;
 }
+/**
+ * The writer environment identity. Experiments frozen before shell and session
+ * bookkeeping was excluded keep their legacy hash when it still matches (a
+ * resume from the same shell), so their identity and writer keys hold.
+ */
+export function writerEnvironmentHash(
+  provider: Pick<
+    ComparisonProvider,
+    "environmentHash" | "legacyEnvironmentHash"
+  >,
+  ...frozen: (ComparisonManifest | undefined)[]
+): string {
+  const current = provider.environmentHash();
+  const recorded = frozen.map((m) => m?.settings?.toolchain?.environmentHash);
+  if (recorded.includes(current)) return current;
+  const legacy = provider.legacyEnvironmentHash();
+  return recorded.includes(legacy) ? legacy : current;
+}
 function writerKey(
   manifest: ComparisonManifest,
   profile: Preparation | undefined,
@@ -221,10 +263,7 @@ function writerKey(
     toolchain: manifest.settings.toolchain,
     replicate,
     system,
-    runtime:
-      system === "codex-native"
-        ? null
-        : manifest[system === "tracetoon-baseline" ? "baseline" : "candidate"],
+    runtime: skillInput(system) ? manifest[skillInput(system)!] : null,
     performanceBlock: contentOnly ? null : manifest.performanceBlock,
   });
 }
@@ -308,140 +347,158 @@ export function rebuildComparison(
   const loaded = manifest.cases.map((c) =>
     loadCase(join(root, "inputs", "cases", c.id)),
   );
+  const provider = manifestProvider(manifest.settings),
+    MODELS = manifest.settings.models,
+    JUDGES = manifest.settings.judges,
+    SYSTEMS = manifestSystems(manifest.settings, provider),
+    COMPARISONS = judgedAgainst(SYSTEMS, provider);
   const allArtifacts = new Map<string, PRArtifact>(),
     metrics: WriterMetric[] = [],
     reports: ComparisonReport[] = [],
     allPairs: { model: string; replicate: number; pair: PairResult }[] = [];
   const missingOrderEvidence: string[] = [];
-  for (
-    let replicate = 1;
-    replicate <= manifest.settings.replicates;
-    replicate++
-  )
-    for (const model of MODELS) {
-      const base = modelRoot(root, replicate, model);
-      for (const l of loaded)
-        for (const system of SYSTEMS) {
-          const file = join(base, "artifacts", l.case.id, `${system}.json`);
-          if (!existsSync(file)) continue;
-          const artifact = read<PRArtifact>(file),
-            receipt = read(file.replace(/\.json$/, ".receipt.json"));
-          assertScope(artifact, file, manifest.id);
-          if (
-            checkArtifact(artifact).length ||
-            artifact.system !== system ||
-            artifact.case !== l.case.id ||
-            artifact.meta.model !== model ||
-            receipt.key !==
-              writerKey(
-                manifest,
-                profile,
-                manifest.cases.find((c) => c.id === l.case.id)!,
-                model,
-                system,
-                replicate,
-              ) ||
-            receipt.digest !== artifactDigest(artifact) ||
-            receipt.experiment !== manifest.id
-          )
-            throw new Error("Saved artifact identity is invalid.");
-          allArtifacts.set(
-            `${replicate}/${model}/${l.case.id}/${system}`,
-            artifact,
-          );
-          const status = existsSync(file.replace(/\.json$/, ".status.json"))
-            ? read(file.replace(/\.json$/, ".status.json"))
-            : {};
-          metrics.push({
-            ...artifact.meta,
-            ...performanceEvidence(artifact),
-            model,
-            case: l.case.id,
-            system,
-            replicate,
-            cleanup: status.cleanup?.state ?? "unknown",
-            validationCommands: artifact.validation?.commands.length ?? 0,
-            commandsWithKnownDirectory:
-              artifact.validation?.commands.filter(
-                (c) => !c.cwd.startsWith("unknown"),
-              ).length ?? 0,
-            commandsWithKnownRevision:
-              artifact.validation?.commands.filter((c) => c.before && c.after)
-                .length ?? 0,
-          });
-        }
-      for (const comparison of ["tracetoon-baseline", "codex-native"]) {
-        const pairFile = join(base, comparison, "pairs.json");
-        if (!existsSync(pairFile)) continue;
-        const pairs = read<PairResult[]>(pairFile),
-          artifacts = new Map<string, Map<string, PRArtifact>>();
-        const pairIds = pairs.map((pair) => `${pair.case}/${pair.judge}`);
-        if (
-          new Set(pairIds).size !== pairs.length ||
-          pairs.some(
-            (pair) =>
-              pair.x !== comparison ||
-              pair.y !== "tracetoon-candidate" ||
-              !JUDGES.includes(pair.judge) ||
-              !loaded.some((l) => l.case.id === pair.case),
-          )
-        )
-          throw new Error(
-            "Pair results contain duplicate or unexpected samples.",
-          );
-        for (const pair of pairs)
-          for (const order of ["ab", "ba"] as const) {
-            const file = judgmentPath(
-              join(base, comparison, "judgments"),
-              pair.case,
-              pair.judge,
-              pair.x,
-              pair.y,
-              order,
+  const checkouts = verifiedCheckouts();
+  try {
+    for (
+      let replicate = 1;
+      replicate <= manifest.settings.replicates;
+      replicate++
+    )
+      for (const model of MODELS) {
+        const base = modelRoot(root, replicate, model);
+        for (const l of loaded)
+          for (const system of SYSTEMS) {
+            const file = join(base, "artifacts", l.case.id, `${system}.json`);
+            if (!existsSync(file)) continue;
+            const artifact = read<PRArtifact>(file),
+              receipt = read(file.replace(/\.json$/, ".receipt.json"));
+            assertScope(artifact, file, manifest.id);
+            if (
+              checkArtifact(artifact).length ||
+              artifact.system !== system ||
+              artifact.case !== l.case.id ||
+              !artifactMatchesArm(artifact.meta, model) ||
+              receipt.key !==
+                writerKey(
+                  manifest,
+                  profile,
+                  manifest.cases.find((c) => c.id === l.case.id)!,
+                  model,
+                  system,
+                  replicate,
+                ) ||
+              receipt.digest !== artifactDigest(artifact) ||
+              receipt.experiment !== manifest.id
+            )
+              throw new Error("Saved artifact identity is invalid.");
+            allArtifacts.set(
+              `${replicate}/${model}/${l.case.id}/${system}`,
+              artifact,
             );
-            if (!existsSync(file) || !pair.orderDigests?.[order])
-              missingOrderEvidence.push(
-                `${replicate}/${model}/${pair.case}/${pair.judge}/${comparison}/${order}`,
+            const status = existsSync(file.replace(/\.json$/, ".status.json"))
+              ? read(file.replace(/\.json$/, ".status.json"))
+              : {};
+            // Directories the runtime recorded, recovered from retained traces.
+            const validation = rescoredValidation(
+              artifact,
+              writerTracesDir(root, file),
+              (tree) =>
+                l.case.repo.bundle
+                  ? checkouts.get(join(l.dir, l.case.repo.bundle), tree)
+                  : undefined,
+            );
+            metrics.push({
+              ...artifact.meta,
+              ...performanceEvidence(artifact, validation),
+              model,
+              case: l.case.id,
+              system,
+              replicate,
+              cleanup: status.cleanup?.state ?? "unknown",
+              validationCommands: validation?.commands.length ?? 0,
+              commandsWithKnownDirectory:
+                validation?.commands.filter((c) => !c.cwd.startsWith("unknown"))
+                  .length ?? 0,
+              commandsWithKnownRevision:
+                validation?.commands.filter((c) => c.before && c.after)
+                  .length ?? 0,
+            });
+          }
+        for (const comparison of COMPARISONS) {
+          const pairFile = join(base, comparison, "pairs.json");
+          if (!existsSync(pairFile)) continue;
+          const pairs = read<PairResult[]>(pairFile),
+            artifacts = new Map<string, Map<string, PRArtifact>>();
+          const pairIds = pairs.map((pair) => `${pair.case}/${pair.judge}`);
+          if (
+            new Set(pairIds).size !== pairs.length ||
+            pairs.some(
+              (pair) =>
+                pair.x !== comparison ||
+                pair.y !== "tracetoon-candidate" ||
+                !JUDGES.includes(pair.judge) ||
+                !loaded.some((l) => l.case.id === pair.case),
+            )
+          )
+            throw new Error(
+              "Pair results contain duplicate or unexpected samples.",
+            );
+          for (const pair of pairs)
+            for (const order of ["ab", "ba"] as const) {
+              const file = judgmentPath(
+                join(base, comparison, "judgments"),
+                pair.case,
+                pair.judge,
+                pair.x,
+                pair.y,
+                order,
               );
-            else if (digest(readFileSync(file)) !== pair.orderDigests[order])
-              throw new Error(
-                "Order judgment bytes changed after pair acceptance.",
+              if (!existsSync(file) || !pair.orderDigests?.[order])
+                missingOrderEvidence.push(
+                  `${replicate}/${model}/${pair.case}/${pair.judge}/${comparison}/${order}`,
+                );
+              else if (digest(readFileSync(file)) !== pair.orderDigests[order])
+                throw new Error(
+                  "Order judgment bytes changed after pair acceptance.",
+                );
+            }
+          const facts = new Map(loaded.map((l) => [l.case.id, loadFacts(l)!])),
+            splitOf = new Map(loaded.map((l) => [l.case.id, l.case.split]));
+          for (const l of loaded) {
+            const a = allArtifacts.get(
+                `${replicate}/${model}/${l.case.id}/${comparison}`,
+              ),
+              b = allArtifacts.get(
+                `${replicate}/${model}/${l.case.id}/tracetoon-candidate`,
+              );
+            if (a && b)
+              artifacts.set(
+                l.case.id,
+                new Map([
+                  [comparison, a],
+                  ["tracetoon-candidate", b],
+                ]),
               );
           }
-        const facts = new Map(loaded.map((l) => [l.case.id, loadFacts(l)!])),
-          splitOf = new Map(loaded.map((l) => [l.case.id, l.case.split]));
-        for (const l of loaded) {
-          const a = allArtifacts.get(
-              `${replicate}/${model}/${l.case.id}/${comparison}`,
-            ),
-            b = allArtifacts.get(
-              `${replicate}/${model}/${l.case.id}/tracetoon-candidate`,
-            );
-          if (a && b)
-            artifacts.set(
-              l.case.id,
-              new Map([
-                [comparison, a],
-                ["tracetoon-candidate", b],
-              ]),
-            );
+          const report = buildReport({
+            results: pairs,
+            judges: JUDGES,
+            artifacts,
+            facts,
+            splitOf,
+          });
+          atomicJson(join(base, comparison, "report.json"), report);
+          writeFileSync(
+            join(base, comparison, "report.md"),
+            reportMarkdown(report),
+          );
+          reports.push({ model, replicate, comparison, report });
+          allPairs.push(...pairs.map((pair) => ({ model, replicate, pair })));
         }
-        const report = buildReport({
-          results: pairs,
-          judges: JUDGES,
-          artifacts,
-          facts,
-          splitOf,
-        });
-        atomicJson(join(base, comparison, "report.json"), report);
-        writeFileSync(
-          join(base, comparison, "report.md"),
-          reportMarkdown(report),
-        );
-        reports.push({ model, replicate, comparison, report });
-        allPairs.push(...pairs.map((pair) => ({ model, replicate, pair })));
       }
-    }
+  } finally {
+    checkouts.dispose();
+  }
   const expectedWriters =
     loaded.length *
     MODELS.length *
@@ -450,7 +507,7 @@ export function rebuildComparison(
   const expectedOrders =
     loaded.length *
     MODELS.length *
-    2 *
+    COMPARISONS.length *
     JUDGES.length *
     2 *
     manifest.settings.replicates;
@@ -517,6 +574,7 @@ export function rebuildComparison(
     MODELS,
     findings,
     adjudications,
+    SYSTEMS.includes(provider.native) ? provider.native : null,
   );
   const performance = performanceReport(
     metrics,
@@ -567,7 +625,13 @@ export function rebuildComparison(
       "src/performance.ts",
       "src/gates.ts",
       "src/run/status.ts",
+      "src/report/score.ts",
+      "src/report/prices.json",
     ]),
+    scores: collectDraftScores(root, (id) => {
+      const l = loaded.find((c) => c.case.id === id);
+      return l && loadFacts(l);
+    }),
     limitations: [
       `${manifest.settings.replicates} replicate(s) still represent ${loaded.length} independent cases in this split.`,
       "Writer timing includes service waits and neutral observation overhead; runtime diagnostics may overlap.",
@@ -603,6 +667,12 @@ export function rebuildComparison(
     "",
     ...summary.limitations.map((x) => `- ${x}`),
     "",
+    scoreMarkdown(
+      summary.scores,
+      "Scores",
+      collectWriterFailures(root),
+      collectJudgeFailures(root),
+    ),
     ...reports.map(
       (r) =>
         `## ${r.model}, replicate ${r.replicate}: ${r.comparison}\n\n${reportMarkdown(r.report)}`,
@@ -624,16 +694,34 @@ export function rebuildComparison(
   return summary;
 }
 
+/**
+ * Default writer timeout for a new experiment: PRBENCH_WRITER_TIMEOUT_MS, else
+ * 30 minutes. `--timeout-ms` takes precedence. The value is part of the
+ * experiment identity and writer cache keys, so choose it before freezing.
+ */
+export function writerTimeoutMs(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const raw = env.PRBENCH_WRITER_TIMEOUT_MS;
+  if (raw === undefined || raw === "") return 30 * 60_000;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0)
+    throw new Error(
+      `PRBENCH_WRITER_TIMEOUT_MS must be a positive integer of milliseconds, not "${raw}".`,
+    );
+  return n;
+}
+
 export async function compareV2(opts: CompareOptions) {
   if (opts.recoverLock && !opts.resume)
     throw new Error("Lock recovery requires --resume.");
   const root = resolve(opts.out),
     harness = resolve(import.meta.dir, ".."),
-    preflightCache = join(
-      harness,
-      "node_modules",
-      ".cache",
-      "prbench-preflight",
+    // Shared by every controller on this harness checkout (mirrors are
+    // created atomically; see preflight.ts). PRBENCH_PREFLIGHT_CACHE moves it.
+    preflightCache = resolve(
+      process.env.PRBENCH_PREFLIGHT_CACHE ||
+        join(harness, "node_modules", ".cache", "prbench-preflight"),
     );
   const old = existsSync(join(root, "manifest.json"))
     ? read<ComparisonManifest>(join(root, "manifest.json"))
@@ -656,6 +744,23 @@ export async function compareV2(opts: CompareOptions) {
   }
   if (!["dev", "test"].includes(opts.split))
     throw new Error("Comparison split must be dev or test.");
+  const provider = comparisonProvider(opts.provider),
+    MODELS = opts.models?.length ? opts.models : provider.models,
+    JUDGES = provider.judges;
+  if (old && manifestProvider(old.settings).id !== provider.id)
+    throw new Error(
+      `This experiment was frozen for ${manifestProvider(old.settings).label}; resume it with --provider ${manifestProvider(old.settings).id}.`,
+    );
+  // A resume without --systems keeps the systems the experiment was frozen with.
+  const SYSTEMS =
+      opts.systems?.length || !old
+        ? selectSystems(provider, opts.systems)
+        : manifestSystems(old.settings, provider),
+    COMPARISONS = judgedAgainst(SYSTEMS, provider);
+  checkArms(MODELS, provider.id === "claude" ? "claude" : "codex");
+  const parallel = Number(opts.parallel ?? 4);
+  if (!Number.isSafeInteger(parallel) || parallel < 1)
+    throw new Error("--parallel must be a positive integer.");
   const replicates = Number(opts.replicates ?? 3),
     purpose = opts.purpose ?? "confirmation";
   if (
@@ -711,8 +816,8 @@ export async function compareV2(opts: CompareOptions) {
     opts.preparation ? read<Preparation>(resolve(opts.preparation)) : undefined,
     opts.preparation,
   );
-  const cli = exec([...codexCommand(), "--version"]);
-  if (cli.code) throw new Error("Codex CLI unavailable.");
+  const cli = exec([...provider.command(), "--version"]);
+  if (cli.code) throw new Error(`${provider.label} CLI unavailable.`);
   const common = ["package.json", "bun.lock", "tsconfig.json"];
   const writerEntries = COMPARISON_WRITER_ENTRIES;
   const writerContract = implementationDigest(harness, writerEntries);
@@ -746,41 +851,40 @@ export async function compareV2(opts: CompareOptions) {
       join(harness, "cases", "example-greet-default"),
     ),
     settings: {
+      // Omitted for Codex so experiments frozen before providers keep their identity.
+      ...(provider.id === "codex" ? {} : { provider: provider.id }),
       models: MODELS,
+      // Omitted for all three systems so earlier experiments keep their identity.
+      ...(SYSTEMS.length === provider.systems.length
+        ? {}
+        : { systems: SYSTEMS }),
       judges: JUDGES,
-      effort: "medium",
-      timeoutMs: opts.timeoutMs ?? 30 * 60_000,
+      effort: provider.effort,
+      // Frozen in the identity and writer keys: a resume keeps the recorded value.
+      timeoutMs:
+        opts.timeoutMs ?? old?.settings.timeoutMs ?? writerTimeoutMs(),
       rubricVersion: RUBRIC_VERSION,
       replicates,
       purpose,
       cliVersion: cli.stdout.trim(),
-      agentCommandHash: commandIdentity(codexCommand(), harness),
+      agentCommandHash: commandIdentity(provider.command(), harness),
       promptHash: digest(PR_PROMPT),
       toolchain: {
         bun: Bun.version,
         node: process.version,
         platform: process.platform,
         arch: process.arch,
-        environmentHash: stageKey(
-          "writer-environment",
-          Object.fromEntries(
-            Object.entries(codexRunEnv(process.env)).filter(
-              ([key]) =>
-                ![
-                  "CODEX_HOME",
-                  "HOME",
-                  "USERPROFILE",
-                  "APPDATA",
-                  "LOCALAPPDATA",
-                  "XDG_CONFIG_HOME",
-                  "XDG_DATA_HOME",
-                  "FAKE_CODEX_JUDGMENT",
-                  "FAKE_CODEX_SKIP_OUTPUT_FILE",
-                ].includes(key.toUpperCase()),
-            ),
-          ),
+        environmentHash: writerEnvironmentHash(
+          provider,
+          old,
+          opts.reuseFrom &&
+            existsSync(join(resolve(opts.reuseFrom), "manifest.json"))
+            ? read<ComparisonManifest>(
+                join(resolve(opts.reuseFrom), "manifest.json"),
+              )
+            : undefined,
         ),
-        authProfileHash: digest(codexAuthHome()),
+        authProfileHash: provider.authProfileHash(),
         executableSha256: digest(readFileSync(process.execPath)),
         owner: ownerIdentity(),
       },
@@ -850,7 +954,12 @@ export async function compareV2(opts: CompareOptions) {
   const planned = {
     writers: selected.length * MODELS.length * SYSTEMS.length * replicates,
     orders:
-      selected.length * MODELS.length * 2 * JUDGES.length * 2 * replicates,
+      selected.length *
+      MODELS.length *
+      COMPARISONS.length *
+      JUDGES.length *
+      2 *
+      replicates,
   };
   if (opts.plan) {
     const preview = preflight(selected, { cache: preflightCache });
@@ -901,6 +1010,8 @@ export async function compareV2(opts: CompareOptions) {
     const plan = {
       schema: "prbench.comparison-plan/v2",
       ...planned,
+      systems: SYSTEMS,
+      judgedAgainst: COMPARISONS,
       purpose,
       replicates,
       writerContract,
@@ -1006,7 +1117,7 @@ export async function compareV2(opts: CompareOptions) {
               checkArtifact(artifact).length ||
               artifact.case !== c.id ||
               artifact.system !== system ||
-              artifact.meta.model !== model ||
+              !artifactMatchesArm(artifact.meta, model) ||
               receipt.key !== key ||
               receipt.digest !== artifactDigest(artifact) ||
               receipt.experiment !== reuse.manifest.id
@@ -1033,13 +1144,21 @@ export async function compareV2(opts: CompareOptions) {
     out: join(root, "preflight.json"),
   });
   if (opts.prepareOnly) return { status: "prepared", exitCode: 0, planned };
+  if (provider.id === "claude" && !claudeAuthStatus().ok)
+    throw new Error(
+      "No Claude login for benchmarks. Run `claude setup-token`, then `prbench auth claude` to store the token.",
+    );
   const release = controllerLock(root, manifest.id, opts.recoverLock);
   const controller = new AbortController(),
     restoreSignal = setCancellationSignal(controller.signal);
   const cancel = () => controller.abort();
+  // Concurrent Codex runs share the dedicated login file instead of queuing
+  // on exclusive copies (see setCodexLoginSharing).
+  setCodexLoginSharing(provider.id === "codex" && parallel > 1);
   process.on("SIGINT", cancel);
   process.on("SIGTERM", cancel);
-  let active = "preflight",
+  const activeJobs = new Set<string>();
+  let phase = "preflight",
     finishedWriters = 0,
     finishedOrders = 0,
     newWriterCalls = 0,
@@ -1051,7 +1170,9 @@ export async function compareV2(opts: CompareOptions) {
       schema: "prbench.experiment-state/v2",
       status,
       pid: process.pid,
-      active,
+      active: activeJobs.size ? [...activeJobs].join("; ") : phase,
+      activeJobs: [...activeJobs],
+      parallel,
       finishedWriters,
       finishedOrders,
       newWriterCalls,
@@ -1065,7 +1186,7 @@ export async function compareV2(opts: CompareOptions) {
   const heartbeat = setInterval(() => {
     update();
     console.error(
-      `[progress] ${finishedWriters}/${planned.writers} writers; ${finishedOrders}/${planned.orders} order judgments; ${active}`,
+      `[progress] ${finishedWriters}/${planned.writers} writers; ${finishedOrders}/${planned.orders} order judgments; ${activeJobs.size ? [...activeJobs].join("; ") : phase}`,
     );
   }, 30000);
   try {
@@ -1075,15 +1196,16 @@ export async function compareV2(opts: CompareOptions) {
       experiment: manifest.id,
       probeCase: join(root, "inputs", "isolation", "example-greet-default"),
       models: MODELS,
+      agent: provider.id,
+      effort: provider.effort,
+      concurrency: parallel,
       variants: SYSTEMS.map((system) => {
-        const which =
-            system === "tracetoon-baseline" ? "baseline" : "candidate",
-          skill = join(root, "inputs", which);
+        const which = skillInput(system);
+        if (!which) return { system };
+        const skill = join(root, "inputs", which);
         return {
           system,
-          ...(system === "codex-native"
-            ? {}
-            : { pinned: { skill, runtime: join(skill, "bin", runtimeName) } }),
+          pinned: { skill, runtime: join(skill, "bin", runtimeName) },
         };
       }),
     });
@@ -1091,336 +1213,386 @@ export async function compareV2(opts: CompareOptions) {
       update("verified");
       return { status: "verified", exitCode: 0 };
     }
-    for (let replicate = 1; replicate <= replicates; replicate++)
-      for (const [modelIndex, model] of MODELS.entries()) {
-        const base = modelRoot(root, replicate, model),
-          arts = new Map<string, Map<string, PRArtifact>>();
-        for (const [caseIndex, l] of loaded.entries()) {
-          const order = systemOrder(modelIndex, caseIndex, replicate),
-            group = new Map<string, PRArtifact>();
-          arts.set(l.case.id, group);
-          for (const system of order) {
-            if (controller.signal.aborted)
-              throw new Error("Comparison cancelled.");
-            active = `writer r${replicate} ${model}/${l.case.id}/${system}`;
-            update();
-            assertResume(
-              manifest.settings.cliVersion,
-              exec([...codexCommand(), "--version"]).stdout.trim(),
+    // Writers and judges form one job graph. A judge needs only the two drafts
+    // it compares, so it runs as soon as they exist instead of after every
+    // writer of its model; with --parallel 1 the jobs keep the serial order.
+    const groups = new Map<string, Map<string, PRArtifact>>(),
+      pairStore = new Map<string, Map<string, PairResult>>(),
+      jobs: PoolJob[] = [];
+    const groupOf = (replicate: number, model: string, id: string) => {
+      const key = `${replicate}/${model}/${id}`;
+      if (!groups.has(key)) groups.set(key, new Map());
+      return groups.get(key)!;
+    };
+    const writerId = (
+      replicate: number,
+      model: string,
+      id: string,
+      system: string,
+    ) => `writer/${replicate}/${model}/${id}/${system}`;
+    // Rebuilt in a fixed case/judge order so pairs.json never depends on
+    // which judge finished first.
+    const persistPairs = (base: string, comparison: string, key: string) => {
+      const found = pairStore.get(key)!,
+        ordered: PairResult[] = [];
+      for (const l of loaded)
+        for (const judge of JUDGES) {
+          const pair = found.get(`${l.case.id}/${judge}`);
+          if (pair) ordered.push(pair);
+        }
+      atomicJson(join(base, comparison, "pairs.json"), ordered);
+    };
+    const runWriter = async (
+      replicate: number,
+      model: string,
+      l: (typeof loaded)[number],
+      system: string,
+      label: string,
+    ) => {
+      const base = modelRoot(root, replicate, model),
+        group = groupOf(replicate, model, l.case.id);
+      assertResume(
+        manifest.settings.cliVersion,
+        exec([...provider.command(), "--version"]).stdout.trim(),
+      );
+      const c = manifest.cases.find((c) => c.id === l.case.id)!,
+        key = writerKey(manifest, frozenProfile, c, model, system, replicate),
+        content = writerKey(
+          manifest,
+          frozenProfile,
+          c,
+          model,
+          system,
+          replicate,
+          true,
+        );
+      const file = join(base, "artifacts", l.case.id, `${system}.json`),
+        receiptFile = file.replace(/\.json$/, ".receipt.json");
+      let artifact: PRArtifact;
+      if (existsSync(file)) {
+        artifact = read(file);
+        assertScope(artifact, file, manifest.id);
+        reusedWriters++;
+        if (!existsSync(receiptFile)) {
+          const committed = cache.get<{ artifact: PRArtifact }>("writer", key);
+          if (
+            !committed ||
+            artifactDigest(committed.artifact) !== artifactDigest(artifact)
+          )
+            throw new Error(
+              "Orphaned artifact has no committed cache receipt; preserve it for recovery.",
             );
-            const c = manifest.cases.find((c) => c.id === l.case.id)!,
-              key = writerKey(
-                manifest,
-                frozenProfile,
-                c,
-                model,
-                system,
-                replicate,
-              ),
-              content = writerKey(
-                manifest,
-                frozenProfile,
-                c,
-                model,
-                system,
-                replicate,
-                true,
+          atomicJson(receiptFile, {
+            experiment: manifest.id,
+            key,
+            digest: artifactDigest(artifact),
+          });
+          recordEvent(root, {
+            stage: "writer",
+            key,
+            kind: "recovered",
+            artifact: file,
+          });
+        }
+        assertResume(read(receiptFile), {
+          experiment: manifest.id,
+          key,
+          digest: artifactDigest(artifact),
+        });
+        recordEvent(root, {
+          stage: "writer",
+          key,
+          kind: "reused",
+          artifact: file,
+        });
+      } else {
+        const pointer =
+          purpose === "diagnostic"
+            ? cache.get<{ key: string }>("writer-content", content)
+            : undefined;
+        const reused =
+          cache.get<{ artifact: PRArtifact; status: unknown }>("writer", key) ??
+          (pointer
+            ? cache.get<{ artifact: PRArtifact; status: unknown }>(
+                "writer",
+                pointer.key,
+              )
+            : undefined);
+        if (reused) {
+          reusedWriters++;
+          artifact = reused.artifact;
+          assertScope(artifact, file, manifest.id);
+          atomicJson(file, reused.artifact);
+          atomicJson(file.replace(/\.json$/, ".status.json"), {
+            artifact: "saved",
+            cleanup: { state: "reused" },
+            origin: pointer?.key ?? key,
+          });
+          recordEvent(root, {
+            stage: "writer",
+            key,
+            kind: "reused",
+            artifact: file,
+          });
+        } else {
+          const attemptRoot = join(root, "attempts", "writer", key);
+          mkdirSync(attemptRoot, { recursive: true });
+          const prior = readdirSync(attemptRoot).filter((name) =>
+            /^\d{3}$/.test(name),
+          );
+          let accepted: PRArtifact | undefined;
+          for (let attempt = prior.length + 1; attempt <= 3; attempt++) {
+            const dir = join(attemptRoot, String(attempt).padStart(3, "0"));
+            mkdirSync(dir);
+            newWriterCalls++;
+            console.log(`call ${label}, attempt ${attempt}`);
+            update();
+            recordEvent(root, {
+              stage: "writer",
+              key,
+              kind: "started",
+              attempt,
+            });
+            const started = performance.now();
+            try {
+              assertResume(
+                writerContract,
+                implementationDigest(harness, writerEntries),
               );
-            const file = join(base, "artifacts", l.case.id, `${system}.json`),
-              receiptFile = file.replace(/\.json$/, ".receipt.json");
-            let artifact: PRArtifact;
-            if (existsSync(file)) {
-              artifact = read(file);
-              assertScope(artifact, file, manifest.id);
-              reusedWriters++;
-              if (!existsSync(receiptFile)) {
-                const committed = cache.get<{ artifact: PRArtifact }>(
-                  "writer",
-                  key,
+              assertResume(
+                manifest.settings.agentCommandHash,
+                commandIdentity(provider.command(), harness),
+              );
+              const which =
+                  system === "tracetoon-baseline" ? "baseline" : "candidate",
+                skill = join(root, "inputs", which),
+                runtime = join(skill, "bin", runtimeName);
+              if (skillInput(system))
+                assertResume(
+                  manifest[which].identity,
+                  runtimeIdentity(skill, runtime),
                 );
-                if (
-                  !committed ||
-                  artifactDigest(committed.artifact) !==
-                    artifactDigest(artifact)
-                )
-                  throw new Error(
-                    "Orphaned artifact has no committed cache receipt; preserve it for recovery.",
-                  );
-                atomicJson(receiptFile, {
-                  experiment: manifest.id,
-                  key,
-                  digest: artifactDigest(artifact),
-                });
-                recordEvent(root, {
-                  stage: "writer",
-                  key,
-                  kind: "recovered",
-                  artifact: file,
-                });
+              const result = await runComparisonWriter({
+                agent: provider.id,
+                loaded: l,
+                model,
+                system,
+                skill,
+                runtime,
+                timeoutMs: manifest.settings.timeoutMs,
+                out: dir,
+                preparation: frozenProfile,
+                ledgerRoot: root,
+              });
+              const value = result.artifact;
+              assertResume(
+                writerContract,
+                implementationDigest(harness, writerEntries),
+              );
+              if (
+                value.meta.writerOutcome?.isError ||
+                value.meta.writerOutcome?.timedOut
+              )
+                throw new Error(
+                  `Writer invocation failed; available draft retained as diagnostic evidence. ${(value.meta.notes ?? []).join("; ")}`,
+                );
+              value.meta.experimentId = manifest.id;
+              if (skillInput(system)) {
+                assertResume(manifest[which].hash, directoryDigest(skill));
+                value.meta.runtimeIdentity = manifest[which].identity;
               }
-              assertResume(read(receiptFile), {
-                experiment: manifest.id,
+              const status = join(dir, l.case.id, `${system}.status.json`);
+              if (existsSync(status))
+                cpSync(status, file.replace(/\.json$/, ".status.json"));
+              if (
+                checkArtifact(value).length ||
+                value.case !== l.case.id ||
+                value.system !== system ||
+                !artifactMatchesArm(value.meta, model)
+              )
+                throw new Error("Generated artifact identity is invalid.");
+              // Only generations that pass the scope audit are cached, so a
+              // rejected sample can be retried under the same key. A rejected
+              // generation stays in its attempt folder and .isolation-failure.json.
+              assertScope(value, file, manifest.id);
+              cache.put("writer", key, {
+                artifact: value,
+                status: existsSync(status) ? read(status) : null,
+              });
+              accepted = value;
+              if (!cache.get("writer-content", content))
+                cache.putIfAbsent("writer-content", content, { key });
+              atomicJson(file, value);
+              recordEvent(root, {
+                stage: "writer",
                 key,
-                digest: artifactDigest(artifact),
+                kind: "accepted",
+                attempt,
+                durationMs: performance.now() - started,
+                artifact: file,
+              });
+              break;
+            } catch (error) {
+              const kind = failureKind(error),
+                detail = redactEvidence(String(error));
+              atomicJson(join(dir, "failure.json"), {
+                failureKind: kind,
+                replicate,
+                model,
+                case: l.case.id,
+                system,
+                detail,
+                durationMs: performance.now() - started,
               });
               recordEvent(root, {
                 stage: "writer",
                 key,
-                kind: "reused",
-                artifact: file,
+                kind: "failed",
+                attempt,
+                failureKind: kind,
+                detail,
+                durationMs: performance.now() - started,
               });
-            } else {
-              const pointer =
-                purpose === "diagnostic"
-                  ? cache.get<{ key: string }>("writer-content", content)
-                  : undefined;
-              const reused =
-                cache.get<{ artifact: PRArtifact; status: unknown }>(
-                  "writer",
-                  key,
-                ) ??
-                (pointer
-                  ? cache.get<{ artifact: PRArtifact; status: unknown }>(
-                      "writer",
-                      pointer.key,
-                    )
-                  : undefined);
-              if (reused) {
-                reusedWriters++;
-                artifact = reused.artifact;
-                assertScope(artifact, file, manifest.id);
-                atomicJson(file, reused.artifact);
-                atomicJson(file.replace(/\.json$/, ".status.json"), {
-                  artifact: "saved",
-                  cleanup: { state: "reused" },
-                  origin: pointer?.key ?? key,
-                });
-                recordEvent(root, {
-                  stage: "writer",
-                  key,
-                  kind: "reused",
-                  artifact: file,
-                });
-              } else {
-                const attemptRoot = join(root, "attempts", "writer", key);
-                mkdirSync(attemptRoot, { recursive: true });
-                const prior = readdirSync(attemptRoot).filter((name) =>
-                  /^\d{3}$/.test(name),
-                );
-                let accepted: PRArtifact | undefined;
-                for (let attempt = prior.length + 1; attempt <= 3; attempt++) {
-                  const dir = join(
-                    attemptRoot,
-                    String(attempt).padStart(3, "0"),
-                  );
-                  mkdirSync(dir);
-                  newWriterCalls++;
-                  console.log(`call ${active}, attempt ${attempt}`);
-                  update();
-                  recordEvent(root, {
-                    stage: "writer",
-                    key,
-                    kind: "started",
-                    attempt,
-                  });
-                  const started = performance.now();
-                  try {
-                    assertResume(
-                      writerContract,
-                      implementationDigest(harness, writerEntries),
-                    );
-                    assertResume(
-                      manifest.settings.agentCommandHash,
-                      commandIdentity(codexCommand(), harness),
-                    );
-                    const which =
-                        system === "tracetoon-baseline"
-                          ? "baseline"
-                          : "candidate",
-                      skill = join(root, "inputs", which),
-                      runtime = join(skill, "bin", runtimeName);
-                    if (system !== "codex-native")
-                      assertResume(
-                        manifest[which].identity,
-                        runtimeIdentity(skill, runtime),
-                      );
-                    const result = await runComparisonWriter({
-                      loaded: l,
-                      model,
-                      system,
-                      skill,
-                      runtime,
-                      timeoutMs: manifest.settings.timeoutMs,
-                      out: dir,
-                      preparation: frozenProfile,
-                      ledgerRoot: root,
-                    });
-                    const value = result.artifact;
-                    assertResume(
-                      writerContract,
-                      implementationDigest(harness, writerEntries),
-                    );
-                    if (
-                      value.meta.writerOutcome?.isError ||
-                      value.meta.writerOutcome?.timedOut
-                    )
-                      throw new Error(
-                        `Writer invocation failed; available draft retained as diagnostic evidence. ${(value.meta.notes ?? []).join("; ")}`,
-                      );
-                    value.meta.experimentId = manifest.id;
-                    if (system !== "codex-native") {
-                      assertResume(
-                        manifest[which].hash,
-                        directoryDigest(skill),
-                      );
-                      value.meta.runtimeIdentity = manifest[which].identity;
-                    }
-                    const status = join(
-                      dir,
-                      l.case.id,
-                      `${system}.status.json`,
-                    );
-                    if (existsSync(status))
-                      cpSync(status, file.replace(/\.json$/, ".status.json"));
-                    if (
-                      checkArtifact(value).length ||
-                      value.case !== l.case.id ||
-                      value.system !== system ||
-                      value.meta.model !== model
-                    )
-                      throw new Error(
-                        "Generated artifact identity is invalid.",
-                      );
-                    // A completed generation survives a later audit rejection. Every
-                    // consumer must still pass the current audit before accepting it.
-                    cache.put("writer", key, {
-                      artifact: value,
-                      status: existsSync(status) ? read(status) : null,
-                    });
-                    assertScope(value, file, manifest.id);
-                    accepted = value;
-                    if (!cache.get("writer-content", content))
-                      cache.putIfAbsent("writer-content", content, { key });
-                    atomicJson(file, value);
-                    recordEvent(root, {
-                      stage: "writer",
-                      key,
-                      kind: "accepted",
-                      attempt,
-                      durationMs: performance.now() - started,
-                      artifact: file,
-                    });
-                    break;
-                  } catch (error) {
-                    const kind = failureKind(error),
-                      detail = redactEvidence(String(error));
-                    atomicJson(join(dir, "failure.json"), {
-                      failureKind: kind,
-                      detail,
-                      durationMs: performance.now() - started,
-                    });
-                    recordEvent(root, {
-                      stage: "writer",
-                      key,
-                      kind: "failed",
-                      attempt,
-                      failureKind: kind,
-                      detail,
-                      durationMs: performance.now() - started,
-                    });
-                    if (
-                      controller.signal.aborted ||
-                      kind !== "transient" ||
-                      attempt === 3
-                    )
-                      throw error;
-                    await Bun.sleep(
-                      retryDelay(error, attempt === 1 ? 10000 : 30000),
-                    );
-                  }
-                }
-                if (!accepted)
-                  throw new Error(
-                    `Writer attempt limit exhausted for ${l.case.id}/${system}. Completed work is preserved.`,
-                  );
-                artifact = accepted;
-              }
-              atomicJson(receiptFile, {
-                experiment: manifest.id,
-                key,
-                digest: artifactDigest(artifact),
-              });
+              if (
+                controller.signal.aborted ||
+                !["transient", "no-draft", "scope", "timeout"].includes(kind) ||
+                attempt === 3
+              )
+                throw error;
+              await abortableSleep(
+                retryDelay(error, attempt === 1 ? 10000 : 30000),
+                controller.signal,
+              );
             }
-            if (
-              checkArtifact(artifact).length ||
-              artifact.system !== system ||
-              artifact.case !== l.case.id
-            )
-              throw new Error("Saved artifact identity is invalid.");
-            assertScope(artifact, file, manifest.id);
-            group.set(system, artifact);
-            finishedWriters++;
-            update();
           }
+          if (!accepted)
+            throw new Error(
+              `Writer attempt limit exhausted for ${l.case.id}/${system}. Completed work is preserved.`,
+            );
+          artifact = accepted;
         }
-        for (const comparison of ["tracetoon-baseline", "codex-native"]) {
-          const pairs: PairResult[] = [],
-            out = join(base, comparison);
+        atomicJson(receiptFile, {
+          experiment: manifest.id,
+          key,
+          digest: artifactDigest(artifact),
+        });
+      }
+      if (
+        checkArtifact(artifact).length ||
+        artifact.system !== system ||
+        artifact.case !== l.case.id
+      )
+        throw new Error("Saved artifact identity is invalid.");
+      assertScope(artifact, file, manifest.id);
+      group.set(system, artifact);
+      finishedWriters++;
+    };
+    const runJudge = async (
+      replicate: number,
+      model: string,
+      l: (typeof loaded)[number],
+      comparison: string,
+      judge: string,
+      label: string,
+    ) => {
+      const base = modelRoot(root, replicate, model),
+        out = join(base, comparison),
+        key = `${replicate}/${model}/${comparison}`;
+      if (!pairStore.has(key)) pairStore.set(key, new Map());
+      const group = groupOf(replicate, model, l.case.id);
+      const judgeProvider = parseJudge(judge),
+        observed = {
+          ...judgeProvider,
+          ask: async (prompt: string, schema?: object) => {
+            assertResume(
+              judgeContract,
+              implementationDigest(harness, judgeEntries),
+            );
+            assertResume(
+              manifest.settings.agentCommandHash,
+              commandIdentity(provider.command(), harness),
+            );
+            newJudgeCalls++;
+            console.log(`call ${label}`);
+            update();
+            const reply = await judgeProvider.ask(prompt, schema);
+            assertResume(
+              judgeContract,
+              implementationDigest(harness, judgeEntries),
+            );
+            return reply;
+          },
+        };
+      const pairResult = await judgePair({
+        loaded: l,
+        facts: loadFacts(l)!,
+        x: group.get(comparison)!,
+        y: group.get("tracetoon-candidate")!,
+        judge: observed,
+        outDir: join(out, "judgments"),
+        controls: {
+          cache,
+          contract: judgeContract,
+          ledgerRoot: root,
+          onEvent: (kind) => {
+            if (kind === "reused") reusedOrders++;
+          },
+        },
+      });
+      pairStore.get(key)!.set(`${l.case.id}/${judge}`, pairResult);
+      persistPairs(base, comparison, key);
+      finishedOrders += 2;
+    };
+    let serial = 0;
+    for (let replicate = 1; replicate <= replicates; replicate++)
+      for (const [modelIndex, model] of MODELS.entries()) {
+        for (const [caseIndex, l] of loaded.entries())
+          for (const system of systemOrder(
+            modelIndex,
+            caseIndex,
+            replicate,
+            SYSTEMS,
+          )) {
+            const label = `writer r${replicate} ${model}/${l.case.id}/${system}`;
+            jobs.push({
+              id: writerId(replicate, model, l.case.id, system),
+              label,
+              deps: [],
+              priority: -serial++,
+              run: () => runWriter(replicate, model, l, system, label),
+            });
+          }
+        for (const comparison of COMPARISONS)
           for (const l of loaded)
             for (const judge of JUDGES) {
-              if (controller.signal.aborted)
-                throw new Error("Comparison cancelled.");
-              active = `judge r${replicate} ${model}/${l.case.id}/${comparison}/${judge}`;
-              update();
-              const group = arts.get(l.case.id)!;
-              const provider = parseJudge(judge),
-                observed = {
-                  ...provider,
-                  ask: async (prompt: string) => {
-                    assertResume(
-                      judgeContract,
-                      implementationDigest(harness, judgeEntries),
-                    );
-                    assertResume(
-                      manifest.settings.agentCommandHash,
-                      commandIdentity(codexCommand(), harness),
-                    );
-                    newJudgeCalls++;
-                    console.log(`call ${active}`);
-                    update();
-                    const reply = await provider.ask(prompt);
-                    assertResume(
-                      judgeContract,
-                      implementationDigest(harness, judgeEntries),
-                    );
-                    return reply;
-                  },
-                };
-              pairs.push(
-                await judgePair({
-                  loaded: l,
-                  facts: loadFacts(l)!,
-                  x: group.get(comparison)!,
-                  y: group.get("tracetoon-candidate")!,
-                  judge: observed,
-                  outDir: join(out, "judgments"),
-                  controls: {
-                    cache,
-                    contract: judgeContract,
-                    ledgerRoot: root,
-                    onEvent: (kind) => {
-                      if (kind === "reused") reusedOrders++;
-                    },
-                  },
-                }),
-              );
-              atomicJson(join(out, "pairs.json"), pairs);
-              finishedOrders += 2;
-              update();
+              const label = `judge r${replicate} ${model}/${l.case.id}/${comparison}/${judge}`;
+              jobs.push({
+                id: `judge/${replicate}/${model}/${l.case.id}/${comparison}/${judge}`,
+                label,
+                deps: [comparison, "tracetoon-candidate"].map((system) =>
+                  writerId(replicate, model, l.case.id, system),
+                ),
+                // Serially, judges follow their model's writers; in parallel
+                // they jump the queue so finished cases report early.
+                priority: (parallel > 1 ? 1e9 : 0) - serial++,
+                run: () =>
+                  runJudge(replicate, model, l, comparison, judge, label),
+              });
             }
-        }
       }
-    active = "report";
+    await runPool(jobs, {
+      limit: parallel,
+      signal: controller.signal,
+      onStart: (job) => {
+        activeJobs.add(job.label);
+        update();
+      },
+      onFinish: (job) => {
+        activeJobs.delete(job.label);
+        update();
+      },
+    });
+    phase = "report";
     const summary = rebuildComparison(root, manifest, preflightCache);
     update("complete", { outcome: summary.status, exitCode: summary.exitCode });
     return summary;
@@ -1439,6 +1611,8 @@ export async function compareV2(opts: CompareOptions) {
     throw error;
   } finally {
     clearInterval(heartbeat);
+    setCodexLoginSharing(false);
+    releaseCodexLoginLease();
     restoreSignal();
     process.off("SIGINT", cancel);
     process.off("SIGTERM", cancel);

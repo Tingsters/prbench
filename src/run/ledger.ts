@@ -73,8 +73,14 @@ export function readEvents(root: string): LedgerEvent[] {
 }
 export function failureKind(
   error: unknown,
-): "transient" | "auth" | "timeout" | "invalid" {
+): "transient" | "auth" | "timeout" | "no-draft" | "scope" | "invalid" {
   const message = String(error);
+  // A writer that finished but left no PR or draft. Retried like a transient
+  // failure; the rate is reported per arm as a reliability measure.
+  if (/produced no PR/.test(message)) return "no-draft";
+  // The scope audit rejected the draft (it stays rejected and is never
+  // scored); a new sample in a fresh sandbox may stay in scope.
+  if (/Preserved artifact rejected/.test(message)) return "scope";
   if (
     /unauthori[sz]ed|invalid.grant|sign.in|authentication|refresh.token|\b401\b|\b403\b/i.test(
       message,

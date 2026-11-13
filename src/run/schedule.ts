@@ -8,13 +8,10 @@ export function systemOrder(
   modelIndex: number,
   caseIndex: number,
   replicate: number,
+  systems: string[] = COMPARISON_SYSTEMS,
 ) {
   if (!Number.isSafeInteger(replicate) || replicate < 1)
     throw new Error("Replicate IDs start at one.");
-  const rotate =
-    (modelIndex + caseIndex + replicate - 1) % COMPARISON_SYSTEMS.length;
-  return [
-    ...COMPARISON_SYSTEMS.slice(rotate),
-    ...COMPARISON_SYSTEMS.slice(0, rotate),
-  ];
+  const rotate = (modelIndex + caseIndex + replicate - 1) % systems.length;
+  return [...systems.slice(rotate), ...systems.slice(0, rotate)];
 }

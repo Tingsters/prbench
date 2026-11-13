@@ -1,6 +1,6 @@
 import {afterAll,expect,test}from'bun:test';
 import{join}from'node:path';
-import{readFileSync,unlinkSync,mkdirSync,writeFileSync}from'node:fs';
+import{readFileSync,readdirSync,rmSync,unlinkSync,mkdirSync,writeFileSync}from'node:fs';
 import{judgePair,judgmentPath}from'../src/judge/pairwise.ts';
 import{RUBRIC_KEYS}from'../src/judge/rubric.ts';
 import{loadCase,loadFacts}from'../src/schema/case.ts';
@@ -30,6 +30,27 @@ test('exhausted format repair cannot be reset by resume',async()=>{
  await expect(judgePair(opts)).rejects.toThrow('no usable judgment');expect(calls).toBe(2);
  await expect(judgePair(opts)).rejects.toThrow('persisted recovery limit');expect(calls).toBe(2);
  expect(retryDelay(new Error('Retry-After: 12'),100)).toBe(12000);
+});
+test('a judge timeout persisted by a stopped run is retried on resume, within the 3-attempt budget',async()=>{
+ const out=tempDir(),ledger=tempDir();let calls=0,stop=true;
+ const judge={id:'fixture:slow',family:'fixture',ask:async()=>{calls++;if(stop)throw new Error('claude judge timed out after 900000 ms');return{text:valid};}};
+ const opts={loaded,facts,x:artifact('a'),y:artifact('b'),judge,outDir:out,controls:{ledgerRoot:ledger,retryDelays:[0,0]}};
+ // Every attempt times out: three attempts, then the run stops.
+ await expect(judgePair(opts)).rejects.toThrow('timed out');expect(calls).toBe(3);
+ // Resume with all three used still refuses without another call.
+ await expect(judgePair(opts)).rejects.toThrow('no usable judgment');expect(calls).toBe(3);
+ // A run stopped after one timed-out attempt (as before the retry) resumes at attempt 2.
+ const out2=tempDir();calls=0;
+ const opts2={...opts,outDir:out2,controls:{ledgerRoot:ledger,retryDelays:[0,0]}};
+ const once={...judge,ask:async()=>{calls++;throw new Error('claude judge timed out after 900000 ms');}};
+ const dir=judgmentPath(out2,loaded.case.id,judge.id,'a','b','ab')+'.attempts';
+ await expect(judgePair({...opts2,judge:once})).rejects.toThrow('timed out');
+ expect(calls).toBe(3);
+ const key=readdirSync(dir)[0]!;for(const n of ['002','003'])for(const f of ['request','result'])rmSync(join(dir,key,`${n}.${f}.json`));
+ stop=false;calls=0;
+ // One call finishes the resumed order, one the order that never started.
+ const pair=await judgePair(opts2);expect(calls).toBe(2);expect(pair.verdict).toBe('tie');
+ expect(readdirSync(join(dir,key)).filter(f=>f.endsWith('.accepted.json'))).toEqual(['002.accepted.json']);
 });
 test('fresh redacted traces survive sandbox cleanup without credential files',async()=>{
  const out=tempDir();

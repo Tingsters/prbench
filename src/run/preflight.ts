@@ -4,8 +4,10 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { checkFacts, loadFacts, type LoadedCase } from "../schema/case.ts";
 import { assertNoPublishedPrText, hasUserInput } from "../import/session.ts";
@@ -43,6 +45,32 @@ function casePath(loaded: LoadedCase, name: string) {
     throw new Error("Case input escaped its directory.");
   return path;
 }
+/**
+ * The shared inspection mirror of a case bundle. Several controllers (one per
+ * `compare` process) share this cache, so the mirror is cloned beside its
+ * final path and renamed into place: no process ever sees a half-cloned
+ * mirror, and the loser of a race discards its copy.
+ */
+function ensureMirror(bundle: string, bare: string, cache: string) {
+  if (existsSync(bare)) return;
+  mkdirSync(cache, { recursive: true });
+  const temporary = `${bare}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    const result = exec(["git", "clone", "--mirror", "--quiet", bundle, temporary]);
+    if (result.code)
+      throw new Error(
+        `Cannot inspect case bundle: ${result.stderr.slice(-500)}`,
+      );
+    try {
+      renameSync(temporary, bare);
+    } catch (error) {
+      if (!existsSync(bare)) throw error;
+    }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
 export function preflightCase(
   loaded: LoadedCase,
   opts: { cache: string; requireProvenance?: boolean },
@@ -76,24 +104,37 @@ export function preflightCase(
     sourceCache.set(key, result.stdout);
     return result.stdout;
   };
-  if (!existsSync(bare)) {
-    mkdirSync(opts.cache, { recursive: true });
-    const result = exec(["git", "clone", "--mirror", "--quiet", bundle, bare]);
-    if (result.code)
-      throw new Error(
-        `Cannot inspect case bundle: ${result.stderr.slice(-500)}`,
-      );
-  }
+  ensureMirror(bundle, bare, opts.cache);
   for (const revision of [loaded.case.repo.base, loaded.case.repo.head]) {
     if (!revision || !/^[a-f0-9]{40}$/.test(revision))
       throw new Error("Comparison revisions must be full Git SHAs.");
-    if (
-      exec(["git", "--git-dir", bare, "cat-file", "-e", `${revision}^{commit}`])
-        .code
-    ) {
-      // Older inspection caches may have fetched only branch heads, omitting
-      // the bundle's custom base anchors. Fetch all supplied refs, never a remote.
-      git(["fetch", "--quiet", bundle, "+refs/*:refs/*"]);
+    const has = () =>
+      !exec(["git", "--git-dir", bare, "cat-file", "-e", `${revision}^{commit}`])
+        .code;
+    // Older inspection caches may have fetched only branch heads, omitting
+    // the bundle's custom base anchors. Fetch all supplied refs, never a remote.
+    // Another controller may be fetching into the same shared cache: a ref
+    // lock conflict is retried, and its fetch may supply the commit first.
+    for (let attempt = 0; !has(); attempt++) {
+      const result = exec([
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "protocol.ext.allow=never",
+        "--git-dir",
+        bare,
+        "fetch",
+        "--quiet",
+        bundle,
+        "+refs/*:refs/*",
+      ]);
+      if (!result.code || has()) break;
+      if (attempt >= 20)
+        throw new Error(
+          `${loaded.case.id}: source verification failed: ${result.stderr.slice(-500)}`,
+        );
+      Bun.sleepSync(100 + Math.floor(Math.random() * 200));
     }
     git(["cat-file", "-e", `${revision}^{commit}`]);
   }

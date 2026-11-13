@@ -2,6 +2,7 @@
 // $PRBENCH_GH_CAPTURE as one JSON line; `gh pr create` succeeds with a fake URL
 // so the PR flow under test completes without anything reaching GitHub.
 // Calls the fake doesn't understand fail loudly rather than pretend to work.
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -32,7 +33,7 @@ function created(): unknown[] {
     .split('\n')
     .filter(Boolean)
     .map((l) => JSON.parse(l))
-    .filter((e) => e.args[0] === 'pr' && e.args[1] === 'create' && e.ok);
+    .filter((e) => e.args[0] === 'pr' && e.args[1] === 'create' && e.ok && !e.help);
 }
 
 function record(entry: Record<string, unknown>): void {
@@ -46,6 +47,9 @@ function done(stdout: string, entry: Record<string, unknown> = {}): never {
 }
 
 const [a, b] = args;
+// Help never acts, as with the real gh: `gh pr create --help` must not open a PR.
+if (args.includes('--help') || args.includes('-h') || a === 'help')
+  done(`gh ${args.filter((x) => !x.startsWith('-')).join(' ')}: help (prbench fake)\n`, { help: true });
 if (a === '--version') done('gh version 2.99.0 (prbench fake)\n');
 if (a === 'auth' && b === 'status') done('Logged in to github.com as prbench (fake)\n');
 if (a === 'api' && b === 'user') done(args.includes('--jq') ? 'prbench\n' : '{"login":"prbench"}\n');
@@ -70,15 +74,46 @@ if (a === 'repo' && b === 'view') {
   for (const f of json.split(',')) out[f] = fields[f] ?? null;
   done(JSON.stringify(out) + '\n');
 }
+// `--fill`, `--fill-first` and `--fill-verbose` take the title and body from
+// the branch's commits, as the real gh does; explicit --title/--body win.
+function commitsSince(base: string): { subject: string; body: string }[] {
+  for (const ref of [base, `origin/${base}`]) {
+    const r = spawnSync('git', ['log', '--reverse', '--no-merges', '--format=%s%x1f%b%x1e', `${ref}..HEAD`], { encoding: 'utf8' });
+    if (r.status === 0)
+      return r.stdout
+        .split('\x1e')
+        .map((c) => c.replace(/^\s+/, ''))
+        .filter(Boolean)
+        .map((c) => {
+          const [subject = '', body = ''] = c.split('\x1f');
+          return { subject: subject.trim(), body: body.trim() };
+        });
+  }
+  return [];
+}
+
+function fill(): { title?: string; body?: string } {
+  const mode = args.includes('--fill-first') ? 'first' : args.includes('--fill-verbose') ? 'verbose' : args.includes('--fill') || args.includes('-f') ? 'fill' : undefined;
+  if (!mode) return {};
+  const commits = commitsSince(flag('--base', '-B') ?? 'main');
+  if (!commits.length) return {};
+  const branch = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+  if (mode === 'first' || commits.length === 1) return { title: commits[0]!.subject, body: commits[0]!.body };
+  if (mode === 'verbose')
+    return { title: branch, body: commits.map((c) => `- **${c.subject}**${c.body ? `\n\n${c.body}` : ''}`).join('\n\n') };
+  return { title: branch, body: commits.map((c) => `- ${c.subject}`).join('\n') };
+}
+
 if (a === 'pr' && b === 'create') {
   const number = created().length + 1;
   const url = `https://github.com/${slug}/pull/${number}`;
+  const filled = fill();
   done(`${url}\n`, {
     pr: {
       number,
       url,
-      title: flag('--title', '-t'),
-      body: readBody(),
+      title: flag('--title', '-t') ?? filled.title,
+      body: readBody() ?? filled.body,
       base: flag('--base', '-B'),
       head: flag('--head', '-H'),
       draft: args.includes('--draft') || args.includes('-d'),

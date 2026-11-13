@@ -332,13 +332,13 @@ export async function runDiagnostic(
           }
           const observed = {
             ...provider,
-            ask: async (prompt: string) => {
+            ask: async (prompt: string, schema?: object) => {
               verify();
               newJudgeCalls++;
               state();
               const at = performance.now();
               try {
-                return await provider.ask(prompt);
+                return await provider.ask(prompt, schema);
               } finally {
                 callDurations.push(performance.now() - at);
               }

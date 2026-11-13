@@ -3,6 +3,11 @@ import type { AgentRunResult } from "./types.ts";
 import { codexCommand, codexRunEnv, withCodexAuth } from "./codexAuth.ts";
 import { runAgentProcess } from "./process.ts";
 import { startValidationCapture } from "./validation.ts";
+import {
+  codexRolloutSnapshot,
+  codexUsageFromDir,
+  type CodexUsage,
+} from "./codexUsage.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -114,6 +119,49 @@ export function parseCodexResult(stdout: string): Partial<AgentRunResult> {
   };
 }
 
+function threadUsage(
+  codexHome: string,
+  prior: Set<string>,
+): CodexUsage | undefined {
+  try {
+    return codexUsageFromDir(
+      join(codexHome, "sessions"),
+      (file) => !prior.has(file),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Stdout usage covers the main thread only; rollouts cover every thread the
+ * run spawned. Prefer the rollouts when they hold at least the main thread's
+ * usage, and say which scope the counts have.
+ */
+export function withThreadUsage(
+  parsed: Partial<AgentRunResult>,
+  usage: CodexUsage | undefined,
+): Partial<AgentRunResult> {
+  if (
+    !usage ||
+    (parsed.inputTokens !== undefined && usage.inputTokens < parsed.inputTokens)
+  )
+    return parsed.inputTokens === undefined
+      ? parsed
+      : { ...parsed, usageScope: "main-thread" };
+  return {
+    ...parsed,
+    inputTokens: usage.inputTokens,
+    cachedInputTokens: usage.cachedInputTokens,
+    outputTokens: usage.outputTokens,
+    usageScope: "all-threads",
+    subagentThreads: usage.subagentThreads,
+    ...(Object.keys(usage.usageByModel).length
+      ? { usageByModel: usage.usageByModel }
+      : {}),
+  };
+}
+
 export async function runCodex(
   sandbox: Sandbox,
   opts: CodexRunOptions,
@@ -168,6 +216,7 @@ export async function runCodex(
       );
       const env = codexRunEnv({ ...sandbox.env, ...opts.env });
       const capture = startValidationCapture(sandbox, env);
+      const priorRollouts = codexRolloutSnapshot(sandbox.codexHome);
       const executionStarted = performance.now();
       const result = await runAgentProcess(cmd, {
         cwd: sandbox.repo,
@@ -179,7 +228,10 @@ export async function runCodex(
       });
       const writerMs = performance.now() - executionStarted,
         captureStarted = performance.now();
-      const parsed = parseCodexResult(result.stdout),
+      const parsed = withThreadUsage(
+          parseCodexResult(result.stdout),
+          threadUsage(sandbox.codexHome, priorRollouts),
+        ),
         validation = capture.finish(result);
       return {
         ...parsed,

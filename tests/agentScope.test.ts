@@ -62,3 +62,16 @@ test('permits redirected sandbox homes including serialized PowerShell paths', (
     { commandId: 'V9', kind: 'host-agent-state' },
   ]);
 });
+
+test('an escaped dot in a glob is shell quoting, not an absolute host path', () => {
+  // Observed from a Codex writer: excludes the installed skill from a file listing.
+  const glob = `/bin/bash -lc "rg --files -g '"'!'"\\\\.agents/**'; cat greet.js; git status --short"`;
+  expect(hostAgentStateFindings([{ id: 'V8', command: glob }])).toEqual([]);
+  // Real Windows and POSIX host paths are still caught.
+  expect(hostAgentStateFindings([{ id: 'W1', command: 'type C:\\Users\\someone\\.codex\\config.toml' }])).toEqual([
+    { commandId: 'W1', kind: 'host-agent-state' },
+  ]);
+  expect(hostAgentStateFindings([{ id: 'P1', command: 'ls /home/someone/.agents/skills' }])).toEqual([
+    { commandId: 'P1', kind: 'host-agent-state' },
+  ]);
+});

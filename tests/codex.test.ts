@@ -170,7 +170,9 @@ test('explicit model and effort make distinct isolated judge identities', async 
   const sol = parseJudge('codex:gpt-6.1-sol@medium'); const terra = parseJudge('codex:gpt-6.1-terra@medium');
   expect(sol.id).toBe('codex:gpt-6.1-sol@medium'); expect(terra.id).not.toBe(sol.id);
   expect(parseJudge('codex:gpt-6.1-sol@high').id).not.toBe(sol.id);
-  expect(() => parseJudge('claude:opus@medium')).toThrow(/invalid judge/);
+  // Claude judges take an explicit effort too; a bare effort without a model does not.
+  expect(parseJudge('claude:opus@medium').id).toBe('claude:opus@medium');
+  expect(() => parseJudge('claude@medium')).toThrow(/invalid judge/);
   env({ FAKE_CODEX_MODE: 'judge', FAKE_CODEX_JUDGMENT: '{"result":"test"}' });
   expect(await sol.ask('judge this pair')).toEqual({ text: '{"result":"test"}' });
   const call = calls().at(-1);

@@ -16,4 +16,21 @@ if (process.argv[2] === 'build-info') {
       },
     }),
   );
+  // Claude Code reads hooks from the sandbox HOME's user settings.
+  mkdirSync(join(process.env.HOME!, '.claude'), { recursive: true });
+  writeFileSync(
+    join(process.env.HOME!, '.claude', 'settings.json'),
+    JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: 'Bash',
+            hooks: [
+              { type: 'command', command: process.execPath + ' hook pre-pr' },
+            ],
+          },
+        ],
+      },
+    }),
+  );
 } else process.exitCode = 1;

@@ -1,19 +1,30 @@
 import { afterAll, expect, test } from "bun:test";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { compare } from "../src/compare.ts";
 import { RUBRIC_KEYS } from "../src/judge/rubric.ts";
 import { artifactDigest } from "../src/schema/artifact.ts";
 import { cleanupTemps, copyExample, tempDir } from "./helpers.ts";
 afterAll(cleanupTemps);
 
-test("frozen comparison runs three systems, both orders, and resumes only matching artifacts", async () => {
+/** Every file under `dir`, as full paths. A portable stand-in for `find`, which is a different tool on Windows. */
+const filesUnder = (dir: string): string[] =>
+  existsSync(dir)
+    ? (readdirSync(dir, { recursive: true }) as string[])
+        .map((f) => join(dir, f))
+        .filter((f) => statSync(f).isFile())
+    : [];
+
+async function fakeComparisonSetup() {
   const cases = copyExample("comparison-smoke");
   const skill = tempDir(),
     bin = join(skill, "bin");
@@ -60,6 +71,7 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
       join(import.meta.dir, "fixtures", "fake-comparison-codex.ts"),
     ]),
     FAKE_CODEX_LOG: log,
+    FAKE_CODEX_SCOPE_ONCE: join(tempDir(), "scope-once"),
     FAKE_CODEX_JUDGMENT: JSON.stringify({
       A: side,
       B: side,
@@ -72,6 +84,16 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
     Object.keys(vars).map((k) => [k, process.env[k]]),
   );
   Object.assign(process.env, vars);
+  const restore = () => {
+    for (const [k, v] of Object.entries(saved))
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+  };
+  return { cases, skill, candidate, log, restore };
+}
+
+test("frozen comparison runs three systems, both orders, and resumes only matching artifacts", async () => {
+  const { cases, skill, candidate, log, restore } = await fakeComparisonSetup();
   const opts = {
     baselineSkill: skill,
     candidateSkill: candidate,
@@ -87,6 +109,13 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
       readFileSync(join(opts.out, "summary.json"), "utf8"),
     );
     expect(summary.writerMetrics.length).toBe(6);
+    // The first writer typed a path outside its sandbox: that sample is
+    // rejected and retried, and the run still completes.
+    const failures = filesUnder(join(opts.out, "attempts", "writer"))
+      .filter((f) => basename(f) === "failure.json")
+      .map((f) => JSON.parse(readFileSync(f, "utf8")));
+    expect(failures.map((f: any) => f.failureKind)).toEqual(["scope"]);
+    expect(readFileSync(join(opts.out, "summary.md"), "utf8")).toContain("Scope-rejected attempts");
     expect(summary.reports.length).toBe(4);
     expect(
       summary.reports.every(
@@ -218,11 +247,10 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
       "outside case inputs",
     );
     expect(readFileSync(log, "utf8")).toBe(afterReplay);
+    // The current audit names the real finding (.isolation-failure.json keeps
+    // the first rejection of this key as history).
     const failure = JSON.parse(
-      readFileSync(
-        artifactPath.replace(".json", ".isolation-failure.json"),
-        "utf8",
-      ),
+      readFileSync(artifactPath.replace(".json", ".scope-audit.json"), "utf8"),
     );
     expect(failure.findings).toEqual([
       { commandId: "V99", kind: "host-agent-state" },
@@ -237,8 +265,150 @@ test("frozen comparison runs three systems, both orders, and resumes only matchi
       "inputs changed",
     );
   } finally {
-    for (const [k, v] of Object.entries(saved))
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
+    restore();
+  }
+}, 240_000);
+
+test("--systems baseline,candidate plans no native writers and only candidate-vs-baseline judgments", async () => {
+  const { cases, skill, candidate, restore } = await fakeComparisonSetup();
+  try {
+    for (const id of ["two", "three", "four", "five"])
+      cpSync(cases.dir, join(cases.root, id), { recursive: true });
+    for (const id of ["two", "three", "four", "five"]) {
+      const file = join(cases.root, id, "case.json"),
+        c = JSON.parse(readFileSync(file, "utf8"));
+      c.id = id;
+      writeFileSync(file, JSON.stringify(c, null, 2));
+    }
+    const base = {
+      baselineSkill: skill,
+      candidateSkill: candidate,
+      cases: cases.root,
+      split: "dev",
+      out: join(tempDir(), "plan"),
+      purpose: "diagnostic",
+      replicates: 3,
+      plan: true,
+    };
+    const all: any = await compare(base);
+    expect(all.writers).toBe(5 * 2 * 3 * 3);
+    expect(all.orders).toBe(5 * 2 * 2 * 2 * 2 * 3);
+    expect(all.judgedAgainst).toEqual(["tracetoon-baseline", "codex-native"]);
+    const plan: any = await compare({
+      ...base,
+      systems: ["baseline", "tracetoon-candidate"],
+    });
+    // 2 models × 5 cases × 3 replicates × 2 systems; one pairing × 2 judges × 2 orders.
+    expect(plan.writers).toBe(60);
+    expect(plan.orders).toBe(120);
+    expect(plan.systems).toEqual(["tracetoon-baseline", "tracetoon-candidate"]);
+    expect(plan.judgedAgainst).toEqual(["tracetoon-baseline"]);
+    expect(plan.jobs).toHaveLength(60);
+    expect(plan.jobs.some((j: any) => j.system === "codex-native")).toBe(false);
+    // The native name and full names are accepted; candidate and baseline are required.
+    expect(
+      ((await compare({ ...base, systems: ["codex-native", "baseline", "candidate"] })) as any).writers,
+    ).toBe(90);
+    await expect(compare({ ...base, systems: ["native", "candidate"] })).rejects.toThrow("baseline and candidate");
+    await expect(compare({ ...base, systems: ["baseline", "native"] })).rejects.toThrow("baseline and candidate");
+    await expect(compare({ ...base, systems: ["baseline", "candidate", "gpt"] })).rejects.toThrow("Unknown system");
+  } finally {
+    restore();
+  }
+}, 240_000);
+
+test("a run without native completes, scores, and records its systems for resume", async () => {
+  const { cases, skill, candidate, log, restore } = await fakeComparisonSetup();
+  const opts = {
+    baselineSkill: skill,
+    candidateSkill: candidate,
+    cases: cases.root,
+    split: "dev",
+    out: join(tempDir(), "experiment"),
+    purpose: "diagnostic",
+    replicates: 1,
+    systems: ["baseline", "candidate"],
+  };
+  try {
+    await compare(opts);
+    const summary = JSON.parse(readFileSync(join(opts.out, "summary.json"), "utf8"));
+    expect(summary.writerMetrics.map((m: any) => m.system).sort()).toEqual([
+      "tracetoon-baseline",
+      "tracetoon-baseline",
+      "tracetoon-candidate",
+      "tracetoon-candidate",
+    ]);
+    expect(summary.coverage).toMatchObject({
+      writers: 4,
+      expectedWriters: 4,
+      orders: 8,
+      expectedOrders: 8,
+      complete: true,
+    });
+    expect(summary.reports.map((r: any) => r.comparison)).toEqual([
+      "tracetoon-baseline",
+      "tracetoon-baseline",
+    ]);
+    expect(summary.qualityGate.failures.join("\n")).not.toContain("native");
+    expect(summary.scores.length).toBe(4);
+    expect(summary.scores.some((d: any) => d.system === "codex-native")).toBe(false);
+    const md = readFileSync(join(opts.out, "summary.md"), "utf8");
+    expect(md).toContain("| gpt-6.1-sol | tracetoon-baseline | 1 | 0.0 [–, –] | – | 0.00 |");
+    expect(md.split("Paired candidate − other system")[1]!.split("\n\n")[1]).not.toContain("native");
+    expect(md).toContain("Composite Δ [95% CI]");
+    const manifest = JSON.parse(readFileSync(join(opts.out, "manifest.json"), "utf8"));
+    expect(manifest.settings.systems).toEqual(["tracetoon-baseline", "tracetoon-candidate"]);
+    const isolation = JSON.parse(readFileSync(join(opts.out, "isolation.json"), "utf8"));
+    expect(isolation.probes.length).toBe(4);
+    // Resume keeps the frozen systems; asking for different ones is a new experiment.
+    const before = readFileSync(log, "utf8");
+    await compare({ ...opts, systems: undefined, resume: true });
+    await compare({ ...opts, resume: true, reportOnly: true });
+    expect(readFileSync(log, "utf8")).toBe(before);
+    await expect(compare({ ...opts, resume: true, systems: ["native", "baseline", "candidate"] })).rejects.toThrow(
+      "inputs changed",
+    );
+  } finally {
+    restore();
+  }
+}, 240_000);
+
+test("a judge call that times out is retried and counted, not fatal", async () => {
+  const { cases, skill, candidate, restore } = await fakeComparisonSetup();
+  const marker = join(tempDir(), "judge-timeout-once");
+  process.env.FAKE_CODEX_JUDGE_TIMEOUT_ONCE = marker;
+  const opts = {
+    baselineSkill: skill,
+    candidateSkill: candidate,
+    cases: cases.root,
+    split: "dev",
+    out: join(tempDir(), "experiment"),
+    purpose: "diagnostic",
+    replicates: 1,
+    systems: ["baseline", "candidate"],
+  };
+  try {
+    await compare(opts);
+    expect(readFileSync(marker, "utf8")).toBe("used");
+    const summary = JSON.parse(readFileSync(join(opts.out, "summary.json"), "utf8"));
+    expect(summary.coverage).toMatchObject({ orders: 8, expectedOrders: 8, complete: true });
+    // The timed-out attempt is kept beside the judgment that succeeded on retry.
+    const results = filesUnder(opts.out)
+      .filter((f) => f.includes("judgments") && f.endsWith(".result.json"))
+      .map((f) => ({ f, r: JSON.parse(readFileSync(f, "utf8")) }));
+    const failed = results.filter(({ r }) => r.failureKind);
+    expect(failed.map(({ r }) => r.failureKind)).toEqual(["timeout"]);
+    expect(failed[0]!.f).toEndWith("001.result.json");
+    expect(results.some(({ f }) => f.startsWith(failed[0]!.f.replace("001.result.json", "002")))).toBe(true);
+    const events = readFileSync(join(opts.out, "events.jsonl"), "utf8")
+      .trim().split("\n").map((l) => JSON.parse(l))
+      .filter((e) => e.stage === "judge" && e.kind === "failed");
+    expect(events.map((e) => [e.attempt, e.failureKind])).toEqual([[1, "timeout"]]);
+    const md = readFileSync(join(opts.out, "summary.md"), "utf8");
+    expect(md).toContain("Judge reliability");
+    expect(md).toMatch(/\| codex:\S+ \| 1 \| 1 \| 0 \| 0 \| 0 \|/);
+  } finally {
+    delete process.env.FAKE_CODEX_JUDGE_TIMEOUT_ONCE;
+    restore();
   }
 }, 240_000);

@@ -74,7 +74,10 @@ export function spawnOwned(
       try {
         process.kill(-proc.pid, "SIGKILL");
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        // ESRCH: the group is gone. EPERM: macOS refuses to signal a group whose
+        // members have all exited but are not yet reaped; nothing is left to stop.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH" && code !== "EPERM") throw error;
       }
     }
     if (proc.exitCode === null) proc.kill(); // Windows closes the helper's exclusive job handle.
